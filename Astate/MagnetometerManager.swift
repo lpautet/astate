@@ -15,9 +15,18 @@ class MagnetometerManager: ObservableObject {
         
         if isAvailable {
             motionManager.magnetometerUpdateInterval = 0.1
-            motionManager.startMagnetometerUpdates(to: .main) { [weak self] data, error in
-                guard let data = data, error == nil else { return }
-                
+        }
+    }
+    
+    func startUpdates() {
+        guard motionManager.isMagnetometerAvailable else { 
+            return 
+        }
+        
+        motionManager.startMagnetometerUpdates(to: .main) { [weak self] data, error in
+            guard let data = data, error == nil else { return }
+            
+            DispatchQueue.main.async {
                 self?.x = data.magneticField.x
                 self?.y = data.magneticField.y
                 self?.z = data.magneticField.z
@@ -29,10 +38,12 @@ class MagnetometerManager: ObservableObject {
         }
     }
     
+    func stopUpdates() {
+        motionManager.stopMagnetometerUpdates()
+    }
+    
     deinit {
-        if isAvailable {
-            motionManager.stopMagnetometerUpdates()
-        }
+        stopUpdates()
     }
     
     // Get cardinal direction from heading

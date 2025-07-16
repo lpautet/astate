@@ -5,40 +5,43 @@ import SwiftUI
 class CloudKitManager: ObservableObject {
     private let container: CKContainer
     private let database: CKDatabase
+    private var hasCheckedStatus = false
+    private var hasSetupSchema = false
     
-    @Published var isSignedInToiCloud = false
-    @Published var error: String?
+    private var isSignedInToiCloud = false
+    private var error: String?
     
     init() {
         container = CKContainer.default()
         database = container.privateCloudDatabase
-        
-        getiCloudStatus()
-        setupCloudKitSchema()
     }
     
-    private func getiCloudStatus() {
+    private func checkiCloudStatusIfNeeded() {
+        guard !hasCheckedStatus else { return }
+        hasCheckedStatus = true
+        
         container.accountStatus { [weak self] status, error in
-            DispatchQueue.main.async {
-                switch status {
-                case .available:
-                    self?.isSignedInToiCloud = true
-                case .noAccount:
-                    self?.error = "No iCloud account found"
-                case .restricted:
-                    self?.error = "iCloud access restricted"
-                case .couldNotDetermine:
-                    self?.error = "Unable to determine iCloud status"
-                case .temporarilyUnavailable:
-                    self?.error = "iCloud services temporarily unavailable"
-                @unknown default:
-                    self?.error = "Unknown iCloud status"
-                }
+            switch status {
+            case .available:
+                self?.isSignedInToiCloud = true
+            case .noAccount:
+                self?.error = "No iCloud account found"
+            case .restricted:
+                self?.error = "iCloud access restricted"
+            case .couldNotDetermine:
+                self?.error = "Unable to determine iCloud status"
+            case .temporarilyUnavailable:
+                self?.error = "iCloud services temporarily unavailable"
+            @unknown default:
+                self?.error = "Unknown iCloud status"
             }
         }
     }
     
-    private func setupCloudKitSchema() {
+    private func setupCloudKitSchemaIfNeeded() {
+        guard !hasSetupSchema else { return }
+        hasSetupSchema = true
+        
         Task {
             do {
                 try await createLocationRecordSchema()
@@ -48,6 +51,11 @@ class CloudKitManager: ObservableObject {
                 print("CloudKit schema setup failed: \(error.localizedDescription)")
             }
         }
+    }
+    
+    private func ensureInitialized() {
+        checkiCloudStatusIfNeeded()
+        setupCloudKitSchemaIfNeeded()
     }
     
     private func createLocationRecordSchema() async throws {
@@ -102,11 +110,13 @@ class CloudKitManager: ObservableObject {
     }
     
     func saveLocationRecord(_ record: LocationRecord) async throws {
+        ensureInitialized()
         let ckRecord = record.toCKRecord()
         try await database.save(ckRecord)
     }
     
     func saveMinMaxRecord(_ record: MinMaxRecord) async throws {
+        ensureInitialized()
         let recordID = CKRecord.ID(recordName: "minmax-singleton")
         
         do {
@@ -132,6 +142,7 @@ class CloudKitManager: ObservableObject {
     }
     
     func fetchMinMaxRecord() async throws -> MinMaxRecord? {
+        ensureInitialized()
         let recordID = CKRecord.ID(recordName: "minmax-singleton")
         do {
             let ckRecord = try await database.record(for: recordID)
@@ -143,6 +154,7 @@ class CloudKitManager: ObservableObject {
     }
     
     func fetchLocationRecords() async throws -> [LocationRecord] {
+        ensureInitialized()
         // Restore working query implementation
         do {
             return try await performCloudKitQuery()
@@ -153,13 +165,47 @@ class CloudKitManager: ObservableObject {
         }
     }
     
+    func fetchLocationRecordsLast24Hours() async throws -> [LocationRecord] {
+        ensureInitialized()
+        do {
+            let oneDayAgo = Date().addingTimeInterval(-24 * 60 * 60) // 24 hours ago
+            return try await performTimeBasedQueryWithPagination(since: oneDayAgo)
+        } catch {
+            print("CloudKit 24h query failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    func fetchLocationRecordsLastWeek() async throws -> [LocationRecord] {
+        ensureInitialized()
+        do {
+            let oneWeekAgo = Date().addingTimeInterval(-7 * 24 * 60 * 60) // 7 days ago
+            return try await performTimeBasedQueryWithPagination(since: oneWeekAgo)
+        } catch {
+            print("CloudKit week query failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    func fetchLocationRecords(since date: Date) async throws -> [LocationRecord] {
+        ensureInitialized()
+        do {
+            return try await performTimeBasedQueryWithPagination(since: date)
+        } catch {
+            print("CloudKit custom range query failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
     private func performCloudKitQuery() async throws -> [LocationRecord] {
         return try await withCheckedThrowingContinuation { continuation in
             let query = CKQuery(recordType: "LocationRecord", predicate: NSPredicate(format: "TRUEPREDICATE"))
+            // Sort by timestamp descending to get the most recent records first
+            query.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
             let operation = CKQueryOperation(query: query)
             
-            // Limit results to avoid potential issues with large datasets
-            operation.resultsLimit = 100
+            // Set to CloudKit's maximum allowed limit per request to get the most recent 400 records
+            operation.resultsLimit = 400
             
             var records: [LocationRecord] = []
             
@@ -189,21 +235,95 @@ class CloudKitManager: ObservableObject {
         }
     }
     
+    private func performTimeBasedQueryWithPagination(since date: Date) async throws -> [LocationRecord] {
+        var allRecords: [LocationRecord] = []
+        var cursor: CKQueryOperation.Cursor? = nil
+        var hasMoreResults = true
+        
+        while hasMoreResults {
+            let batchRecords = try await performTimeBasedQueryBatch(since: date, cursor: cursor)
+            allRecords.append(contentsOf: batchRecords.records)
+            
+            cursor = batchRecords.cursor
+            hasMoreResults = cursor != nil
+            
+            print("Fetched \(batchRecords.records.count) records, total: \(allRecords.count)")
+        }
+        
+        // Sort all results by timestamp (most recent first)
+        let sortedRecords = allRecords.sorted { $0.timestamp > $1.timestamp }
+        print("📊 Fetched \(sortedRecords.count) records from last 24 hours")
+        return sortedRecords
+    }
+    
+    private func performTimeBasedQueryBatch(since date: Date, cursor: CKQueryOperation.Cursor?) async throws -> (records: [LocationRecord], cursor: CKQueryOperation.Cursor?) {
+        return try await withCheckedThrowingContinuation { continuation in
+            let operation: CKQueryOperation
+            
+            if let cursor = cursor {
+                // Continue pagination with cursor
+                operation = CKQueryOperation(cursor: cursor)
+            } else {
+                // Initial query with time-based predicate
+                let predicate = NSPredicate(format: "timestamp >= %@", date as NSDate)
+                let query = CKQuery(recordType: "LocationRecord", predicate: predicate)
+                query.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+                operation = CKQueryOperation(query: query)
+            }
+            
+            // Set limit per batch (CloudKit max is 400)
+            operation.resultsLimit = 400
+            
+            var records: [LocationRecord] = []
+            
+            operation.recordMatchedBlock = { recordID, result in
+                switch result {
+                case .success(let record):
+                    if let locationRecord = LocationRecord.fromCKRecord(record) {
+                        records.append(locationRecord)
+                    }
+                case .failure(let error):
+                    print("Error fetching individual record: \(error)")
+                }
+            }
+            
+            operation.queryResultBlock = { result in
+                switch result {
+                case .success(let cursor):
+                    continuation.resume(returning: (records: records, cursor: cursor))
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+            
+            self.database.add(operation)
+        }
+    }
+    
     // Alternative approach: Track record IDs locally and fetch directly
     private func fetchRecordsById(_ recordIDs: [CKRecord.ID]) async throws -> [LocationRecord] {
         return try await withCheckedThrowingContinuation { continuation in
             let operation = CKFetchRecordsOperation(recordIDs: recordIDs)
+            var records: [LocationRecord] = []
             
-            operation.fetchRecordsCompletionBlock = { recordsByID, error in
-                if let error = error {
+            operation.perRecordResultBlock = { recordID, result in
+                switch result {
+                case .success(let record):
+                    if let locationRecord = LocationRecord.fromCKRecord(record) {
+                        records.append(locationRecord)
+                    }
+                case .failure(let error):
+                    print("Error fetching record \(recordID): \(error)")
+                }
+            }
+            
+            operation.fetchRecordsResultBlock = { result in
+                switch result {
+                case .success:
+                    let sortedRecords = records.sorted { $0.timestamp > $1.timestamp }
+                    continuation.resume(returning: sortedRecords)
+                case .failure(let error):
                     continuation.resume(throwing: error)
-                } else if let recordsByID = recordsByID {
-                    let records = recordsByID.values.compactMap { record in
-                        LocationRecord.fromCKRecord(record)
-                    }.sorted { $0.timestamp > $1.timestamp }
-                    continuation.resume(returning: records)
-                } else {
-                    continuation.resume(returning: [])
                 }
             }
             

@@ -5,11 +5,14 @@ import UserNotifications
 
 class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let locationManager = CLLocationManager()
-    private let cloudKitManager = CloudKitManager()
+    let cloudKitManager = CloudKitManager()
     private var recordingTimer: Timer?
+    private var lastRecordingTime: Date?
+    private var lastRecordedLocation: CLLocation?
     private var notificationTimer: Timer?
     private var lastNotificationTime: Date?
     private var pendingExtremes: [String] = []
+    private var hasLoadedMinMaxValues = false
     
     @Published var location: CLLocation?
     @Published var speed: Double = 0.0
@@ -28,15 +31,10 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        locationManager.distanceFilter = 1.0
+        locationManager.distanceFilter = 10.0  // Default: 10 meters - better for battery while still responsive
         
+        // Request notification permission (this is safe during init)
         requestNotificationPermission()
-        
-        // Request location permission when initializing
-        requestLocationPermission()
-        
-        // Load existing min/max values from CloudKit
-        loadMinMaxValues()
     }
     
     private func requestNotificationPermission() {
@@ -67,18 +65,20 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
     
-    private func loadMinMaxValues() {
-        Task {
+    private func loadMinMaxValuesIfNeeded() {
+        guard !hasLoadedMinMaxValues else { return }
+        hasLoadedMinMaxValues = true
+        
+        Task { @MainActor [weak self] in
             do {
-                if let minMaxRecord = try await cloudKitManager.fetchMinMaxRecord() {
-                    DispatchQueue.main.async {
-                        self.minAltitude = minMaxRecord.minAltitude
-                        self.maxAltitude = minMaxRecord.maxAltitude
-                        self.minLatitude = minMaxRecord.minLatitude
-                        self.maxLatitude = minMaxRecord.maxLatitude
-                        self.minLongitude = minMaxRecord.minLongitude
-                        self.maxLongitude = minMaxRecord.maxLongitude
-                    }
+                guard let self = self else { return }
+                if let minMaxRecord = try await self.cloudKitManager.fetchMinMaxRecord() {
+                    self.minAltitude = minMaxRecord.minAltitude
+                    self.maxAltitude = minMaxRecord.maxAltitude
+                    self.minLatitude = minMaxRecord.minLatitude
+                    self.maxLatitude = minMaxRecord.maxLatitude
+                    self.minLongitude = minMaxRecord.minLongitude
+                    self.maxLongitude = minMaxRecord.maxLongitude
                 }
             } catch {
                 print("Error loading min/max values: \(error.localizedDescription)")
@@ -107,6 +107,14 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
     
     func startUpdatingLocation() {
+        // Defer authorization status update to avoid state modification during view updates
+        Task { @MainActor in
+            self.authorizationStatus = self.locationManager.authorizationStatus
+        }
+        
+        // Load min/max values when we first start location updates
+        loadMinMaxValuesIfNeeded()
+        
         guard locationManager.authorizationStatus == .authorizedWhenInUse || 
               locationManager.authorizationStatus == .authorizedAlways else {
             requestLocationPermission()
@@ -127,8 +135,21 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         locationManager.stopUpdatingLocation()
     }
     
+    func setHighPrecisionMode(_ enabled: Bool) {
+        let newFilter: CLLocationDistance = enabled ? 1.0 : 10.0
+        if locationManager.distanceFilter != newFilter {
+            locationManager.distanceFilter = newFilter
+            print("📍 Distance filter changed to \(newFilter)m (high precision: \(enabled))")
+        }
+    }
+    
     func startRecording() {
         isRecording = true
+        // Record immediately when starting
+        recordCurrentLocation()
+        lastRecordingTime = Date()
+        
+        // Timer for foreground recording (will be suspended in background)
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             self?.recordCurrentLocation()
         }
@@ -138,6 +159,8 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         isRecording = false
         recordingTimer?.invalidate()
         recordingTimer = nil
+        lastRecordingTime = nil
+        lastRecordedLocation = nil
     }
     
     deinit {
@@ -148,24 +171,51 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func recordCurrentLocation() {
         guard let location = location else { return }
         
-        let record = LocationRecord(
-            latitude: location.coordinate.latitude,
-            longitude: location.coordinate.longitude,
-            altitude: location.altitude
-        )
+        // Check if we should record this location (distance-based filtering)
+        let shouldRecord: Bool
+        if let lastLocation = lastRecordedLocation {
+            // Only record if moved at least 5 meters from last recorded position
+            let distance = location.distance(from: lastLocation)
+            shouldRecord = distance >= 5.0
+        } else {
+            // Always record the first location
+            shouldRecord = true
+        }
         
-        Task {
-            do {
-                try await cloudKitManager.saveLocationRecord(record)
-                updateMinMaxValues(with: location)
-                
-                // Notify that new location data was saved
-                DispatchQueue.main.async {
-                    self.lastLocationSaved = Date()
+        // Update last recording time regardless (to maintain 60-second intervals)
+        lastRecordingTime = Date()
+        
+        // Only save to CloudKit if position has changed meaningfully
+        if shouldRecord {
+            let record = LocationRecord(
+                latitude: location.coordinate.latitude,
+                longitude: location.coordinate.longitude,
+                altitude: location.altitude
+            )
+            
+            // Capture distance for logging before updating lastRecordedLocation
+            let distanceMoved = lastRecordedLocation?.distance(from: location) ?? 0.0
+            
+            // Update the last recorded location
+            lastRecordedLocation = location
+            
+            Task { [weak self] in
+                do {
+                    guard let self = self else { return }
+                    try await self.cloudKitManager.saveLocationRecord(record)
+                    self.updateMinMaxValues(with: location)
+                    
+                    // Notify that new location data was saved
+                    await MainActor.run {
+                        self.lastLocationSaved = Date()
+                    }
+                    print("📍 Location recorded: moved \(String(format: "%.1f", distanceMoved))m")
+                } catch {
+                    print("Error saving location record: \(error.localizedDescription)")
                 }
-            } catch {
-                print("Error saving location record: \(error.localizedDescription)")
             }
+        } else {
+            print("📍 Location skipped: only moved \(String(format: "%.1f", location.distance(from: lastRecordedLocation!)))m")
         }
     }
     
@@ -293,6 +343,18 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             
             if self.isRecording {
                 self.updateMinMaxValues(with: location)
+                
+                // Check if it's time to record (for background recording)
+                let now = Date()
+                if let lastTime = self.lastRecordingTime {
+                    // Record if 60 seconds have passed since last recording
+                    if now.timeIntervalSince(lastTime) >= 60.0 {
+                        self.recordCurrentLocation()
+                    }
+                } else {
+                    // First recording when starting
+                    self.recordCurrentLocation()
+                }
             }
         }
     }

@@ -10,11 +10,17 @@ class BarometerManager: ObservableObject {
     
     init() {
         isAvailable = CMAltimeter.isRelativeAltitudeAvailable()
+    }
+    
+    func startUpdates() {
+        guard CMAltimeter.isRelativeAltitudeAvailable() else {
+            return
+        }
         
-        if isAvailable {
-            altimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, error in
-                guard let data = data, error == nil else { return }
-                
+        altimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, error in
+            guard let data = data, error == nil else { return }
+            
+            DispatchQueue.main.async {
                 // Pressure is in kilopascals (kPa)
                 self?.pressure = data.pressure.doubleValue
                 
@@ -24,10 +30,12 @@ class BarometerManager: ObservableObject {
         }
     }
     
+    func stopUpdates() {
+        altimeter.stopRelativeAltitudeUpdates()
+    }
+    
     deinit {
-        if isAvailable {
-            altimeter.stopRelativeAltitudeUpdates()
-        }
+        stopUpdates()
     }
     
     // Convert pressure from kPa to different units

@@ -12,10 +12,49 @@ import MapKit
 
 // MARK: - Main Content View
 struct ContentView: View {
-    @StateObject private var accelerometerManager = AccelerometerManager()
-    @StateObject private var locationManager = LocationManager()
+    @StateObject private var globalLocationManager = LocationManager()
+    
+    var body: some View {
+        TabView {
+            TrackingTabView(locationManager: globalLocationManager)
+                .tabItem {
+                    Image(systemName: "map")
+                    Text("Tracking")
+                }
+            
+            LocationTabView(locationManager: globalLocationManager)
+                .tabItem {
+                    Image(systemName: "location")
+                    Text("Location")
+                }
+            
+            MotionTabView()
+                .tabItem {
+                    Image(systemName: "move.3d")
+                    Text("Motion")
+                }
+            
+            CompassTabView()
+                .tabItem {
+                    Image(systemName: "compass.drawing")
+                    Text("Compass")
+                }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            // App going to background - switch to battery efficient mode
+            globalLocationManager.setHighPrecisionMode(false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // App returning to foreground - precision will be set by individual tabs
+            print("📱 App became active")
+        }
+    }
+}
+
+// MARK: - Location Tab View
+struct LocationTabView: View {
+    @ObservedObject var locationManager: LocationManager
     @StateObject private var barometerManager = BarometerManager()
-    @StateObject private var magnetometerManager = MagnetometerManager()
     
     var body: some View {
         NavigationView {
@@ -23,17 +62,20 @@ struct ContentView: View {
                 VStack(spacing: 20) {
                     LocationDataSectionView(manager: locationManager)
                     
-                    LocationMapView(locationManager: locationManager)
-                    
-                    MinMaxValuesSectionView(manager: locationManager)
-                    
-                    RecordingControlsView(manager: locationManager)
-                    
-                    AccelerometerValuesSectionView(manager: accelerometerManager)
-                    
-                    if magnetometerManager.isAvailable {
-                        MagnetometerSectionView(manager: magnetometerManager)
+                    // High precision mode indicator
+                    HStack {
+                        Image(systemName: "location.fill")
+                            .foregroundColor(.green)
+                            .font(.caption)
+                        Text("High precision mode (1m accuracy)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
                     }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
                     
                     if barometerManager.isAvailable {
                         BarometerSectionView(manager: barometerManager)
@@ -41,16 +83,136 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Astate")
+            .navigationTitle("Current Location")
             .onAppear {
-                accelerometerManager.startUpdates()
                 locationManager.startUpdatingLocation()
+                locationManager.setHighPrecisionMode(true) // 1.0m for real-time viewing
+                if barometerManager.isAvailable {
+                    barometerManager.startUpdates()
+                }
             }
             .onDisappear {
-                accelerometerManager.stopUpdates()
+                locationManager.setHighPrecisionMode(false) // Back to 10.0m for battery efficiency
+                locationManager.stopUpdatingLocation()
+                barometerManager.stopUpdates()
+            }
+        }
+    }
+}
+
+// MARK: - Tracking Tab View
+struct TrackingTabView: View {
+    @ObservedObject var locationManager: LocationManager
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 20) {
+                    RecordingControlsView(manager: locationManager)
+                    
+                    LocationMapView(locationManager: locationManager)
+                    
+                    MinMaxValuesSectionView(manager: locationManager)
+                }
+                .padding()
+            }
+            .navigationTitle("Location Tracking")
+            .onAppear {
+                locationManager.startUpdatingLocation()
+                locationManager.setHighPrecisionMode(false) // Use efficient 10.0m for tracking
+            }
+            .onDisappear {
                 locationManager.stopUpdatingLocation()
             }
         }
+    }
+}
+
+// MARK: - Motion Tab View
+struct MotionTabView: View {
+    @StateObject private var accelerometerManager = AccelerometerManager()
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 20) {
+                    AccelerometerValuesSectionView(manager: accelerometerManager)
+                }
+                .padding()
+            }
+            .navigationTitle("Motion")
+            .onAppear {
+                accelerometerManager.startUpdates()
+            }
+            .onDisappear {
+                accelerometerManager.stopUpdates()
+            }
+        }
+    }
+}
+
+// MARK: - Compass Tab View
+struct CompassTabView: View {
+    @StateObject private var magnetometerManager = MagnetometerManager()
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 20) {
+                    if magnetometerManager.isAvailable {
+                        MagnetometerSectionView(manager: magnetometerManager)
+                    } else {
+                        UnavailableSensorView(
+                            sensorName: "Magnetometer",
+                            description: "Magnetic field sensor is not available on this device"
+                        )
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Compass")
+            .onAppear {
+                if magnetometerManager.isAvailable {
+                    magnetometerManager.startUpdates()
+                }
+            }
+            .onDisappear {
+                magnetometerManager.stopUpdates()
+            }
+        }
+    }
+}
+
+// MARK: - Unavailable Sensor View
+struct UnavailableSensorView: View {
+    let sensorName: String
+    let description: String
+    
+    var body: some View {
+        VStack(spacing: 15) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.largeTitle)
+                .foregroundColor(.orange)
+            
+            Text("Sensor Unavailable")
+                .font(.title2)
+                .fontWeight(.bold)
+            
+            Text(sensorName)
+                .font(.headline)
+                .foregroundColor(.secondary)
+            
+            Text(description)
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 15)
+                .fill(Color(.systemBackground))
+                .shadow(radius: 5)
+        )
     }
 }
 
@@ -155,9 +317,14 @@ struct RecordingControlsView: View {
             }
             
             if manager.isRecording {
-                Text("Recording location data every minute")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(spacing: 2) {
+                    Text("Recording location data every minute (including background)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Only saves when moved 5+ meters")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
             }
         }
         .padding()
@@ -379,42 +546,83 @@ private func authorizationStatusColor(_ status: CLAuthorizationStatus) -> Color 
 }
 
 // MARK: - Location Map View
+enum TimeRange: String, CaseIterable {
+    case recent400 = "Recent 400"
+    case last24Hours = "Last 24 Hours"
+    case lastWeek = "Last Week"
+    
+    var description: String {
+        switch self {
+        case .recent400: return "Most recent 400 records"
+        case .last24Hours: return "All records from last 24 hours"
+        case .lastWeek: return "All records from last 7 days"
+        }
+    }
+}
+
 struct LocationMapView: View {
-    @StateObject private var cloudKitManager = CloudKitManager()
     @ObservedObject var locationManager: LocationManager
     @State private var locationRecords: [LocationRecord] = []
-    @State private var mapRegion = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to San Francisco
-        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+    @State private var mapCameraPosition: MapCameraPosition = .region(
+        MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to San Francisco
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
     )
     @State private var isLoading = true
     @State private var errorMessage: String?
+    @State private var selectedTimeRange: TimeRange = .recent400
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Recorded Locations")
-                    .font(.headline)
-                if locationManager.isRecording {
-                    Image(systemName: "circle.fill")
-                        .foregroundColor(.red)
-                        .font(.caption)
-                    Text("Recording")
-                        .font(.caption)
-                        .foregroundColor(.red)
+            VStack(spacing: 8) {
+                HStack {
+                    Text("Recorded Locations")
+                        .font(.headline)
+                    if locationManager.isRecording {
+                        Image(systemName: "circle.fill")
+                            .foregroundColor(.red)
+                            .font(.caption)
+                        Text("Recording")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                    Spacer()
+                    if isLoading {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else if errorMessage != nil {
+                        Text("Error")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    } else {
+                        Text("\(locationRecords.count) points")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
-                Spacer()
-                if isLoading {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                } else if let error = errorMessage {
-                    Text("Error")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                } else {
-                    Text("\(locationRecords.count) points")
+                
+                HStack {
+                    Text("Time Range:")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    
+                    Picker("Time Range", selection: $selectedTimeRange) {
+                        ForEach(TimeRange.allCases, id: \.self) { range in
+                            Text(range.rawValue).tag(range)
+                        }
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .onChange(of: selectedTimeRange) {
+                        loadLocationRecords()
+                    }
+                }
+                
+                if selectedTimeRange != .recent400 {
+                    Text(selectedTimeRange.description)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
                 }
             }
             
@@ -450,8 +658,15 @@ struct LocationMapView: View {
                 .background(Color(.systemGray6))
                 .cornerRadius(10)
             } else {
-                Map(coordinateRegion: $mapRegion, annotationItems: locationRecords) { record in
-                    MapPin(coordinate: CLLocationCoordinate2D(latitude: record.latitude, longitude: record.longitude))
+                Map(position: $mapCameraPosition) {
+                    ForEach(locationRecords) { record in
+                        Annotation("Location", coordinate: CLLocationCoordinate2D(latitude: record.latitude, longitude: record.longitude)) {
+                            Image(systemName: "mappin.circle.fill")
+                                .foregroundColor(.red)
+                                .background(Color.white)
+                                .clipShape(Circle())
+                        }
+                    }
                 }
                 .frame(height: 250)
                 .cornerRadius(10)
@@ -459,12 +674,19 @@ struct LocationMapView: View {
             
             HStack {
                 if !locationRecords.isEmpty {
-                    Text("Latest: \(formatDate(locationRecords.first?.timestamp ?? Date()))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Latest: \(formatDate(locationRecords.first?.timestamp ?? Date()))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        if selectedTimeRange != .recent400 {
+                            Text("Oldest: \(formatDate(locationRecords.last?.timestamp ?? Date()))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                 }
                 Spacer()
-                Button("Refresh") {
+                Button(isLoading ? "Loading..." : "Refresh") {
                     loadLocationRecords()
                 }
                 .font(.caption)
@@ -478,7 +700,7 @@ struct LocationMapView: View {
         .onAppear {
             loadLocationRecords()
         }
-        .onChange(of: locationManager.lastLocationSaved) { _ in
+        .onChange(of: locationManager.lastLocationSaved) {
             // Auto-refresh map when new location data is saved
             if locationManager.isRecording {
                 loadLocationRecords()
@@ -487,23 +709,39 @@ struct LocationMapView: View {
     }
     
     private func loadLocationRecords() {
-        isLoading = true
-        errorMessage = nil
         Task {
+            // Defer all state changes to avoid modifying state during view update
+            await MainActor.run {
+                self.isLoading = true
+                self.errorMessage = nil
+            }
+            
             do {
-                let records = try await cloudKitManager.fetchLocationRecords()
-                DispatchQueue.main.async {
+                let records: [LocationRecord]
+                
+                switch selectedTimeRange {
+                case .recent400:
+                    records = try await locationManager.cloudKitManager.fetchLocationRecords()
+                case .last24Hours:
+                    records = try await locationManager.cloudKitManager.fetchLocationRecordsLast24Hours()
+                case .lastWeek:
+                    records = try await locationManager.cloudKitManager.fetchLocationRecordsLastWeek()
+                }
+                
+                await MainActor.run {
                     self.locationRecords = records
                     self.isLoading = false
                     self.errorMessage = nil
                     
                     // Update map region to fit all recorded locations
                     if !records.isEmpty {
-                        self.mapRegion = self.calculateMapRegion(for: records)
+                        self.mapCameraPosition = .region(self.calculateMapRegion(for: records))
                     }
+                    
+                    print("📍 Loaded \(records.count) records for \(selectedTimeRange.rawValue)")
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run {
                     self.isLoading = false
                     self.errorMessage = error.localizedDescription
                 }
