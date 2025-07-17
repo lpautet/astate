@@ -286,6 +286,10 @@ struct MinMaxValuesSectionView: View {
                 MinMaxRow(title: "Longitude",
                          min: manager.minLongitude,
                          max: manager.maxLongitude)
+                MinMaxRow(title: "Speed",
+                         min: manager.minSpeed,
+                         max: manager.maxSpeed,
+                         unit: "m/s")
             }
         }
         .padding()

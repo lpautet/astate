@@ -10,6 +10,8 @@ struct MinMaxRecord: Identifiable {
     let maxLatitude: Double
     let minLongitude: Double
     let maxLongitude: Double
+    let minSpeed: Double
+    let maxSpeed: Double
     
     init(id: String = "minmax-singleton",
          lastUpdated: Date = Date(),
@@ -18,7 +20,9 @@ struct MinMaxRecord: Identifiable {
          minLatitude: Double = Double.infinity,
          maxLatitude: Double = -Double.infinity,
          minLongitude: Double = Double.infinity,
-         maxLongitude: Double = -Double.infinity) {
+         maxLongitude: Double = -Double.infinity,
+         minSpeed: Double = Double.infinity,
+         maxSpeed: Double = -Double.infinity) {
         self.id = id
         self.lastUpdated = lastUpdated
         self.minAltitude = minAltitude
@@ -27,6 +31,8 @@ struct MinMaxRecord: Identifiable {
         self.maxLatitude = maxLatitude
         self.minLongitude = minLongitude
         self.maxLongitude = maxLongitude
+        self.minSpeed = minSpeed
+        self.maxSpeed = maxSpeed
     }
     
     // Convert to CloudKit record
@@ -40,6 +46,8 @@ struct MinMaxRecord: Identifiable {
         record["maxLatitude"] = maxLatitude
         record["minLongitude"] = minLongitude
         record["maxLongitude"] = maxLongitude
+        record["minSpeed"] = minSpeed
+        record["maxSpeed"] = maxSpeed
         return record
     }
     
@@ -55,6 +63,10 @@ struct MinMaxRecord: Identifiable {
             return nil
         }
         
+        // Handle speed fields with backward compatibility (might not exist in older records)
+        let minSpeed = record["minSpeed"] as? Double ?? Double.infinity
+        let maxSpeed = record["maxSpeed"] as? Double ?? -Double.infinity
+        
         return MinMaxRecord(
             id: record.recordID.recordName,
             lastUpdated: lastUpdated,
@@ -63,7 +75,9 @@ struct MinMaxRecord: Identifiable {
             minLatitude: minLatitude,
             maxLatitude: maxLatitude,
             minLongitude: minLongitude,
-            maxLongitude: maxLongitude
+            maxLongitude: maxLongitude,
+            minSpeed: minSpeed,
+            maxSpeed: maxSpeed
         )
     }
 } 

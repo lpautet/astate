@@ -23,6 +23,8 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var maxLatitude: Double = -Double.infinity
     @Published var minLongitude: Double = Double.infinity
     @Published var maxLongitude: Double = -Double.infinity
+    @Published var minSpeed: Double = Double.infinity
+    @Published var maxSpeed: Double = -Double.infinity
     @Published var isRecording = false
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published var lastLocationSaved = Date() // Trigger for map updates
@@ -79,6 +81,8 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
                     self.maxLatitude = minMaxRecord.maxLatitude
                     self.minLongitude = minMaxRecord.minLongitude
                     self.maxLongitude = minMaxRecord.maxLongitude
+                    self.minSpeed = minMaxRecord.minSpeed
+                    self.maxSpeed = minMaxRecord.maxSpeed
                 }
             } catch {
                 print("Error loading min/max values: \(error.localizedDescription)")
@@ -94,7 +98,9 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             minLatitude: minLatitude,
             maxLatitude: maxLatitude,
             minLongitude: minLongitude,
-            maxLongitude: maxLongitude
+            maxLongitude: maxLongitude,
+            minSpeed: minSpeed,
+            maxSpeed: maxSpeed
         )
         
         Task {
@@ -257,6 +263,19 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         if longitude > maxLongitude {
             maxLongitude = longitude
             notifyThresholdReached(type: "longitude", value: longitude, isMin: false)
+            hasNewExtreme = true
+        }
+        
+        // Update speed min/max (only for valid speeds >= 0)
+        let currentSpeed = location.speed >= 0 ? location.speed : 0
+        if currentSpeed < minSpeed {
+            minSpeed = currentSpeed
+            notifyThresholdReached(type: "speed", value: currentSpeed, isMin: true)
+            hasNewExtreme = true
+        }
+        if currentSpeed > maxSpeed {
+            maxSpeed = currentSpeed
+            notifyThresholdReached(type: "speed", value: currentSpeed, isMin: false)
             hasNewExtreme = true
         }
         

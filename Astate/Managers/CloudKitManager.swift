@@ -98,6 +98,8 @@ class CloudKitManager: ObservableObject {
         sampleRecord["maxLatitude"] = 0.0
         sampleRecord["minLongitude"] = 0.0
         sampleRecord["maxLongitude"] = 0.0
+        sampleRecord["minSpeed"] = 0.0
+        sampleRecord["maxSpeed"] = 0.0
         
         do {
             let _ = try await database.save(sampleRecord)
@@ -131,6 +133,8 @@ class CloudKitManager: ObservableObject {
             existingRecord["maxLatitude"] = record.maxLatitude
             existingRecord["minLongitude"] = record.minLongitude
             existingRecord["maxLongitude"] = record.maxLongitude
+            existingRecord["minSpeed"] = record.minSpeed
+            existingRecord["maxSpeed"] = record.maxSpeed
             
             try await database.save(existingRecord)
             
