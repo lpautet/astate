@@ -2,28 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>NSMotionUsageDescription</key>
-    <string>This app uses motion data to display accelerometer and magnetometer readings for sensor visualization.</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>We need your location to track your position and record location data.</string>
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>We need your location to track your position and record location data even when the app is in the background.</string>
-    <key>UIBackgroundModes</key>
-    <array>
-        <string>location</string>
-        <string>remote-notification</string>
-    </array>
-    <key>NSUbiquitousContainers</key>
-    <dict>
-        <key>iCloud.com.pautet.app.Astate</key>
-        <dict>
-            <key>NSUbiquitousContainerIsDocumentScopePublic</key>
-            <true/>
-            <key>NSUbiquitousContainerName</key>
-            <string>Astate</string>
-            <key>NSUbiquitousContainerSupportedFolderLevels</key>
-            <string>Any</string>
-        </dict>
-    </dict>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSMotionUsageDescription</key>
+	<string>This app uses motion data to display accelerometer and magnetometer readings for sensor visualization.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>We need your location to track your position and record location data.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>We need your location to track your position and record location data even when the app is in the background.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>remote-notification</string>
+	</array>
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.com.pautet.app.Astate</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>Astate</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
 </dict>
 </plist>
