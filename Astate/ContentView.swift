@@ -664,7 +664,7 @@ struct LocationMapView: View {
             } else {
                 Map(position: $mapCameraPosition) {
                     ForEach(locationRecords) { record in
-                        Annotation("Location", coordinate: CLLocationCoordinate2D(latitude: record.latitude, longitude: record.longitude)) {
+                        Annotation(timeAgo(from: record.timestamp), coordinate: CLLocationCoordinate2D(latitude: record.latitude, longitude: record.longitude)) {
                             Image(systemName: "mappin.circle.fill")
                                 .foregroundColor(.red)
                                 .background(Color.white)
@@ -682,11 +682,9 @@ struct LocationMapView: View {
                         Text("Latest: \(formatDate(locationRecords.first?.timestamp ?? Date()))")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        if selectedTimeRange != .recent400 {
-                            Text("Oldest: \(formatDate(locationRecords.last?.timestamp ?? Date()))")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
+                        Text("Oldest: \(formatDate(locationRecords.last?.timestamp ?? Date()))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
                     }
                 }
                 Spacer()
@@ -804,6 +802,30 @@ struct LocationMapView: View {
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+    
+    private func timeAgo(from date: Date) -> String {
+        let now = Date()
+        let timeInterval = now.timeIntervalSince(date)
+        
+        if timeInterval < 60 {
+            return "now"
+        } else if timeInterval < 3600 { // Less than 1 hour
+            let minutes = Int(timeInterval / 60)
+            return "\(minutes)m"
+        } else if timeInterval < 86400 { // Less than 1 day
+            let hours = Int(timeInterval / 3600)
+            return "\(hours)h"
+        } else if timeInterval < 604800 { // Less than 1 week
+            let days = Int(timeInterval / 86400)
+            return "\(days)d"
+        } else if timeInterval < 2592000 { // Less than 1 month (30 days)
+            let weeks = Int(timeInterval / 604800)
+            return "\(weeks)w"
+        } else {
+            let months = Int(timeInterval / 2592000)
+            return "\(months)mo"
+        }
     }
 }
 
