@@ -42,9 +42,9 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func requestNotificationPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if granted {
-                print("Notification permission granted")
+                LogManager.info("Notification permission granted", category: "System")
             } else if let error = error {
-                print("Error requesting notification permission: \(error.localizedDescription)")
+                LogManager.warning("Error requesting notification permission: \(error.localizedDescription)", category: "System")
             }
         }
     }
@@ -85,7 +85,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
                     self.maxSpeed = minMaxRecord.maxSpeed
                 }
             } catch {
-                print("Error loading min/max values: \(error.localizedDescription)")
+                LogManager.warning("Error loading min/max values: \(error.localizedDescription)", category: "Location")
                 // Keep default values if loading fails
             }
         }
@@ -107,7 +107,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             do {
                 try await cloudKitManager.saveMinMaxRecord(minMaxRecord)
             } catch {
-                print("Error saving min/max values: \(error.localizedDescription)")
+                LogManager.warning("Error saving min/max values: \(error.localizedDescription)", category: "Location")
             }
         }
     }
@@ -145,12 +145,13 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         let newFilter: CLLocationDistance = enabled ? 1.0 : 10.0
         if locationManager.distanceFilter != newFilter {
             locationManager.distanceFilter = newFilter
-            print("📍 Distance filter changed to \(newFilter)m (high precision: \(enabled))")
+            LogManager.info("Distance filter changed to \(newFilter)m (high precision: \(enabled))", category: "Location")
         }
     }
     
     func startRecording() {
         isRecording = true
+        LogManager.info("Started location recording", category: "Location")
         // Record immediately when starting
         recordCurrentLocation()
         lastRecordingTime = Date()
@@ -163,6 +164,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     
     func stopRecording() {
         isRecording = false
+        LogManager.info("Stopped location recording", category: "Location")
         recordingTimer?.invalidate()
         recordingTimer = nil
         lastRecordingTime = nil
@@ -215,13 +217,13 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
                     await MainActor.run {
                         self.lastLocationSaved = Date()
                     }
-                    print("📍 Location recorded: moved \(String(format: "%.1f", distanceMoved))m")
+                    LogManager.info("Location recorded: moved \(String(format: "%.1f", distanceMoved))m", category: "Location")
                 } catch {
-                    print("Error saving location record: \(error.localizedDescription)")
+                    LogManager.critical("Error saving location record: \(error.localizedDescription)", category: "Location")
                 }
             }
         } else {
-            print("📍 Location skipped: only moved \(String(format: "%.1f", location.distance(from: lastRecordedLocation!)))m")
+            LogManager.info("Location skipped: only moved \(String(format: "%.1f", location.distance(from: lastRecordedLocation!)))m", category: "Location")
         }
     }
     

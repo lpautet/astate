@@ -39,14 +39,21 @@ struct ContentView: View {
                     Image(systemName: "compass.drawing")
                     Text("Compass")
                 }
+            
+            LogsTabView()
+                .tabItem {
+                    Image(systemName: "list.bullet.rectangle")
+                    Text("Logs")
+                }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             // App going to background - switch to battery efficient mode
+            LogManager.info("App going to background", category: "System")
             globalLocationManager.setHighPrecisionMode(false)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             // App returning to foreground - precision will be set by individual tabs
-            print("📱 App became active")
+            LogManager.info("App became active", category: "System")
         }
     }
 }
@@ -77,6 +84,8 @@ struct LocationTabView: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
                     
+                    CurrentLocationMapView(locationManager: locationManager)
+                    
                     if barometerManager.isAvailable {
                         BarometerSectionView(manager: barometerManager)
                     }
@@ -85,6 +94,7 @@ struct LocationTabView: View {
             }
             .navigationTitle("Current Location")
             .onAppear {
+                LogManager.info("Location tab opened", category: "UI")
                 locationManager.startUpdatingLocation()
                 locationManager.setHighPrecisionMode(true) // 1.0m for real-time viewing
                 if barometerManager.isAvailable {
@@ -118,6 +128,7 @@ struct TrackingTabView: View {
             }
             .navigationTitle("Location Tracking")
             .onAppear {
+                LogManager.info("Tracking tab opened", category: "UI")
                 locationManager.startUpdatingLocation()
                 locationManager.setHighPrecisionMode(false) // Use efficient 10.0m for tracking
             }
@@ -181,6 +192,295 @@ struct CompassTabView: View {
             }
         }
     }
+}
+
+// MARK: - Logs Tab View
+struct LogsTabView: View {
+    @StateObject private var logManager = LogManager.shared
+    @State private var selectedLevel: LogLevel? = nil
+    @State private var selectedCategory: String? = nil
+    @State private var showingShareSheet = false
+    
+    var filteredLogs: [LogEntry] {
+        var logs = logManager.logs
+        
+        if let level = selectedLevel {
+            logs = logs.filter { $0.level == level }
+        }
+        
+        if let category = selectedCategory {
+            logs = logs.filter { $0.category == category }
+        }
+        
+        return logs
+    }
+    
+    var availableCategories: [String] {
+        Array(Set(logManager.logs.map { $0.category })).sorted()
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                LogFilterControlsView(
+                    selectedLevel: $selectedLevel,
+                    selectedCategory: $selectedCategory,
+                    availableCategories: availableCategories
+                )
+                
+                LogsListView(filteredLogs: filteredLogs)
+            }
+            .background(Color.black)
+            .navigationTitle("Activity Logs")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button("Export Logs") {
+                            showingShareSheet = true
+                        }
+                        Button("Clear All Logs") {
+                            logManager.clearLogs()
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundColor(.white)
+                    }
+                }
+            }
+            .sheet(isPresented: $showingShareSheet) {
+                ActivityViewController(activityItems: [logManager.exportLogs()])
+            }
+        }
+        .onAppear {
+            LogManager.info("Logs tab opened", category: "UI")
+        }
+    }
+}
+
+// MARK: - Log Filter Controls View
+struct LogFilterControlsView: View {
+    @Binding var selectedLevel: LogLevel?
+    @Binding var selectedCategory: String?
+    let availableCategories: [String]
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            LogLevelFilterView(selectedLevel: $selectedLevel)
+            LogCategoryFilterView(selectedCategory: $selectedCategory, availableCategories: availableCategories)
+        }
+        .padding()
+        .background(Color.black.opacity(0.9))
+    }
+}
+
+// MARK: - Log Level Filter View
+struct LogLevelFilterView: View {
+    @Binding var selectedLevel: LogLevel?
+    
+    var body: some View {
+        HStack {
+            Text("Level:")
+                .foregroundColor(.white)
+                .font(.caption)
+            
+            ForEach(LogLevel.allCases, id: \.self) { level in
+                LogLevelButtonView(level: level, selectedLevel: $selectedLevel)
+            }
+            
+            Spacer()
+            
+            Button("Clear") {
+                selectedLevel = nil
+            }
+            .font(.caption)
+            .foregroundColor(.gray)
+        }
+    }
+}
+
+// MARK: - Log Level Button View
+struct LogLevelButtonView: View {
+    let level: LogLevel
+    @Binding var selectedLevel: LogLevel?
+    
+    private var isSelected: Bool {
+        selectedLevel == level
+    }
+    
+    private var backgroundColor: Color {
+        isSelected ? level.color.opacity(0.3) : Color.gray.opacity(0.2)
+    }
+    
+    private var foregroundColor: Color {
+        isSelected ? level.color : .white
+    }
+    
+    var body: some View {
+        Button(action: {
+            selectedLevel = selectedLevel == level ? nil : level
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: level.icon)
+                    .font(.caption)
+                Text(level.rawValue)
+                    .font(.caption)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(backgroundColor)
+            .foregroundColor(foregroundColor)
+            .cornerRadius(4)
+        }
+    }
+}
+
+// MARK: - Log Category Filter View
+struct LogCategoryFilterView: View {
+    @Binding var selectedCategory: String?
+    let availableCategories: [String]
+    
+    var body: some View {
+        HStack {
+            Text("Category:")
+                .foregroundColor(.white)
+                .font(.caption)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack {
+                    ForEach(availableCategories, id: \.self) { category in
+                        LogCategoryButtonView(category: category, selectedCategory: $selectedCategory)
+                    }
+                }
+            }
+            
+            Spacer()
+            
+            Button("Clear") {
+                selectedCategory = nil
+            }
+            .font(.caption)
+            .foregroundColor(.gray)
+        }
+    }
+}
+
+// MARK: - Log Category Button View
+struct LogCategoryButtonView: View {
+    let category: String
+    @Binding var selectedCategory: String?
+    
+    private var isSelected: Bool {
+        selectedCategory == category
+    }
+    
+    private var backgroundColor: Color {
+        isSelected ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2)
+    }
+    
+    private var foregroundColor: Color {
+        isSelected ? .blue : .white
+    }
+    
+    var body: some View {
+        Button(category) {
+            selectedCategory = selectedCategory == category ? nil : category
+        }
+        .font(.caption)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(backgroundColor)
+        .foregroundColor(foregroundColor)
+        .cornerRadius(4)
+    }
+}
+
+// MARK: - Logs List View
+struct LogsListView: View {
+    let filteredLogs: [LogEntry]
+    
+    var body: some View {
+        if filteredLogs.isEmpty {
+            Spacer()
+            VStack {
+                Image(systemName: "list.bullet.rectangle")
+                    .font(.largeTitle)
+                    .foregroundColor(.gray)
+                Text("No logs available")
+                    .foregroundColor(.gray)
+                    .font(.headline)
+                Text("App activity will appear here")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+            }
+            Spacer()
+        } else {
+            List(filteredLogs) { entry in
+                LogEntryRowView(entry: entry)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+            .listStyle(PlainListStyle())
+            .scrollContentBackground(.hidden)
+        }
+    }
+}
+
+// MARK: - Log Entry Row View
+struct LogEntryRowView: View {
+    let entry: LogEntry
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: entry.level.icon)
+                    .foregroundColor(entry.level.color)
+                    .font(.caption)
+                
+                Text(entry.level.rawValue)
+                    .foregroundColor(entry.level.color)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                
+                Text(entry.category)
+                    .foregroundColor(.gray)
+                    .font(.caption)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.gray.opacity(0.2))
+                    .cornerRadius(3)
+                
+                Spacer()
+                
+                Text(entry.formattedTimestamp)
+                    .foregroundColor(.gray)
+                    .font(.caption)
+                    .monospacedDigit()
+            }
+            
+            Text(entry.message)
+                .foregroundColor(.white)
+                .font(.system(.body, design: .monospaced))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(Color.black.opacity(0.3))
+        .cornerRadius(6)
+    }
+}
+
+// MARK: - Activity View Controller
+struct ActivityViewController: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Unavailable Sensor View
@@ -617,7 +917,7 @@ struct LocationMapView: View {
                         }
                     }
                     .pickerStyle(SegmentedPickerStyle())
-                    .onChange(of: selectedTimeRange) {
+                    .onChange(of: selectedTimeRange) { _, _ in
                         loadLocationRecords()
                     }
                 }
@@ -702,7 +1002,7 @@ struct LocationMapView: View {
         .onAppear {
             loadLocationRecords()
         }
-        .onChange(of: locationManager.lastLocationSaved) {
+        .onChange(of: locationManager.lastLocationSaved) { _, _ in
             // Auto-refresh map when new location data is saved
             if locationManager.isRecording {
                 loadLocationRecords()
@@ -740,14 +1040,14 @@ struct LocationMapView: View {
                         self.mapCameraPosition = .region(self.calculateMapRegion(for: records))
                     }
                     
-                    print("📍 Loaded \(records.count) records for \(selectedTimeRange.rawValue)")
+                    LogManager.info("Loaded \(records.count) records for \(selectedTimeRange.rawValue)", category: "Map")
                 }
             } catch {
                 await MainActor.run {
                     self.isLoading = false
                     self.errorMessage = error.localizedDescription
                 }
-                print("Error loading location records: \(error.localizedDescription)")
+                LogManager.warning("Error loading location records: \(error.localizedDescription)", category: "Map")
             }
         }
     }
@@ -825,6 +1125,114 @@ struct LocationMapView: View {
         } else {
             let months = Int(timeInterval / 2592000)
             return "\(months)mo"
+        }
+    }
+}
+
+// MARK: - Current Location Map View
+struct CurrentLocationMapView: View {
+    @ObservedObject var locationManager: LocationManager
+    @State private var mapCameraPosition: MapCameraPosition = .region(
+        MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to San Francisco
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+    )
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Current Position")
+                    .font(.headline)
+                Spacer()
+                if locationManager.location != nil {
+                    Image(systemName: "location.fill")
+                        .foregroundColor(.blue)
+                        .font(.caption)
+                    Text("Live")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+            }
+            
+            if let location = locationManager.location {
+                Map(position: $mapCameraPosition) {
+                    Annotation("Current Location", coordinate: location.coordinate) {
+                        ZStack {
+                            Circle()
+                                .fill(.blue)
+                                .frame(width: 20, height: 20)
+                            Circle()
+                                .stroke(.white, lineWidth: 3)
+                                .frame(width: 20, height: 20)
+                        }
+                        .shadow(radius: 3)
+                    }
+                }
+                .frame(height: 200)
+                .cornerRadius(10)
+                .onAppear {
+                    updateMapPosition(for: location)
+                }
+                .onChange(of: locationManager.location) { _, newLocation in
+                    if let newLocation = newLocation {
+                        updateMapPosition(for: newLocation)
+                    }
+                }
+                
+                // Coordinates display
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Lat: \(String(format: "%.6f", location.coordinate.latitude))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("Lon: \(String(format: "%.6f", location.coordinate.longitude))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Alt: \(String(format: "%.1f", location.altitude)) m")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("Acc: ±\(String(format: "%.1f", location.horizontalAccuracy)) m")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } else {
+                VStack {
+                    Image(systemName: "location.slash")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("No location available")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                    Text("Ensure location services are enabled")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(height: 200)
+                .frame(maxWidth: .infinity)
+                .background(Color(.systemGray6))
+                .cornerRadius(10)
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 2)
+    }
+    
+    private func updateMapPosition(for location: CLLocation) {
+        let newRegion = MKCoordinateRegion(
+            center: location.coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
+        )
+        
+        withAnimation(.easeInOut(duration: 0.5)) {
+            mapCameraPosition = .region(newRegion)
         }
     }
 }
