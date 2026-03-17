@@ -9,10 +9,13 @@ import SwiftUI
 import SwiftData
 import CoreLocation
 import MapKit
+import Charts
 
 // MARK: - Main Content View
 struct ContentView: View {
     @StateObject private var globalLocationManager = LocationManager()
+    @StateObject private var networkMonitor = NetworkMonitor.shared
+    @StateObject private var offlineQueue = OfflineLocationQueue.shared
     
     var body: some View {
         TabView {
@@ -45,6 +48,7 @@ struct ContentView: View {
                     Image(systemName: "list.bullet.rectangle")
                     Text("Logs")
                 }
+                .badge(offlineQueue.pendingCount)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             // App going to background - switch to battery efficient mode
@@ -55,6 +59,13 @@ struct ContentView: View {
             // App returning to foreground - precision will be set by individual tabs
             LogManager.info("App became active", category: "System")
         }
+        .overlay(alignment: .top) {
+            if !networkMonitor.isConnected {
+                NetworkOfflineBanner()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.4), value: networkMonitor.isConnected)
     }
 }
 
@@ -62,6 +73,8 @@ struct ContentView: View {
 struct LocationTabView: View {
     @ObservedObject var locationManager: LocationManager
     @StateObject private var barometerManager = BarometerManager()
+    @StateObject private var weatherManager = WeatherManager()
+    @StateObject private var parkingManager = ParkingManager()
     
     var body: some View {
         NavigationView {
@@ -84,21 +97,40 @@ struct LocationTabView: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
                     
-                    CurrentLocationMapView(locationManager: locationManager)
+                    CurrentLocationMapView(locationManager: locationManager,
+                                          parkingLocation: parkingManager.parkingLocation)
                     
                     if barometerManager.isAvailable {
                         BarometerSectionView(manager: barometerManager)
                     }
+                    
+                    WeatherSectionView(weatherManager: weatherManager)
+                    
+                    ParkingSectionView(parkingManager: parkingManager,
+                                       locationManager: locationManager)
                 }
                 .padding()
             }
             .navigationTitle("Current Location")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NetworkStatusToolbarItem()
+                }
+            }
             .onAppear {
                 LogManager.info("Location tab opened", category: "UI")
                 locationManager.startUpdatingLocation()
                 locationManager.setHighPrecisionMode(true) // 1.0m for real-time viewing
                 if barometerManager.isAvailable {
                     barometerManager.startUpdates()
+                }
+                if let loc = locationManager.location {
+                    weatherManager.fetchIfNeeded(for: loc)
+                }
+            }
+            .onChange(of: locationManager.location) { _, newLocation in
+                if let loc = newLocation {
+                    weatherManager.fetchIfNeeded(for: loc)
                 }
             }
             .onDisappear {
@@ -113,27 +145,55 @@ struct LocationTabView: View {
 // MARK: - Tracking Tab View
 struct TrackingTabView: View {
     @ObservedObject var locationManager: LocationManager
+    @State private var selectedTimeRange: TimeRange = .lastMonth
+    @StateObject private var heatmapManager = HeatmapManager()
+    @State private var showHeatmap = false
+    @State private var showTripHistory = false
+    @State private var tripName = ""
     
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    RecordingControlsView(manager: locationManager)
+                    RecordingControlsView(manager: locationManager,
+                                          showTripHistory: $showTripHistory)
                     
-                    LocationMapView(locationManager: locationManager)
+                    LocationMapView(locationManager: locationManager,
+                                    selectedTimeRange: $selectedTimeRange,
+                                    showHeatmap: showHeatmap,
+                                    heatmapCells: heatmapManager.cells,
+                                    onRecordsLoaded: { records in
+                                        heatmapManager.buildHeatmap(from: records)
+                                    },
+                                    showHeatmapToggle: $showHeatmap)
                     
                     MinMaxValuesSectionView(manager: locationManager)
+                    
+                    TripAnalysisSectionView(locationManager: locationManager, selectedTimeRange: $selectedTimeRange)
                 }
                 .padding()
             }
             .navigationTitle("Location Tracking")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NetworkStatusToolbarItem()
+                }
+            }
             .onAppear {
                 LogManager.info("Tracking tab opened", category: "UI")
                 locationManager.startUpdatingLocation()
-                locationManager.setHighPrecisionMode(false) // Use efficient 10.0m for tracking
+                locationManager.setHighPrecisionMode(false)
             }
             .onDisappear {
                 locationManager.stopUpdatingLocation()
+            }
+            .sheet(isPresented: $showTripHistory) {
+                TripHistoryView(dataManager: locationManager.dataManager)
+            }
+            .sheet(isPresented: $locationManager.showTripSavePrompt) {
+                TripSaveSheet(locationManager: locationManager,
+                               tripName: $tripName,
+                               selectedTimeRange: selectedTimeRange)
             }
         }
     }
@@ -152,6 +212,11 @@ struct MotionTabView: View {
                 .padding()
             }
             .navigationTitle("Motion")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NetworkStatusToolbarItem()
+                }
+            }
             .onAppear {
                 accelerometerManager.startUpdates()
             }
@@ -182,6 +247,11 @@ struct CompassTabView: View {
                 .padding()
             }
             .navigationTitle("Compass")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NetworkStatusToolbarItem()
+                }
+            }
             .onAppear {
                 if magnetometerManager.isAvailable {
                     magnetometerManager.startUpdates()
@@ -236,6 +306,9 @@ struct LogsTabView: View {
             .toolbarBackground(Color.black, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    NetworkStatusToolbarItem()
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button("Export Logs") {
@@ -257,6 +330,59 @@ struct LogsTabView: View {
         .onAppear {
             LogManager.info("Logs tab opened", category: "UI")
         }
+    }
+}
+
+// MARK: - Network Status Views
+
+struct NetworkStatusToolbarItem: View {
+    @StateObject private var networkMonitor = NetworkMonitor.shared
+    @StateObject private var offlineQueue = OfflineLocationQueue.shared
+    @State private var showPanel = false
+
+    var body: some View {
+        Button {
+            showPanel = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: networkMonitor.connectionType.icon)
+                    .foregroundColor(networkMonitor.connectionType.color)
+                    .font(.system(size: 14, weight: .medium))
+                Text(networkMonitor.connectionType.rawValue)
+                    .font(.caption2)
+                    .foregroundColor(networkMonitor.connectionType.color)
+                if offlineQueue.pendingCount > 0 {
+                    Text("\(offlineQueue.pendingCount)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Color.orange)
+                        .clipShape(Capsule())
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: networkMonitor.connectionType)
+        }
+        .sheet(isPresented: $showPanel) {
+            NetworkDetailPanel()
+        }
+    }
+}
+
+struct NetworkOfflineBanner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 13, weight: .semibold))
+            Text("No Internet Connection")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+        }
+        .foregroundColor(.white)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(Color.red.opacity(0.92))
+        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
     }
 }
 
@@ -519,7 +645,10 @@ struct UnavailableSensorView: View {
 // MARK: - Location Data Section View
 struct LocationDataSectionView: View {
     @ObservedObject var manager: LocationManager
-    
+    @State private var currentAddress: String?
+    @State private var isGeocodingAddress = false
+    @State private var lastGeocodedLocation: CLLocation?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Location Data")
@@ -557,12 +686,68 @@ struct LocationDataSectionView: View {
                         .foregroundColor(authorizationStatusColor(manager.authorizationStatus))
                         .font(.caption)
                 }
+
+                HStack {
+                    Text("Address")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if isGeocodingAddress {
+                        ProgressView().scaleEffect(0.7)
+                    } else if let address = currentAddress {
+                        Text(address)
+                            .font(.caption)
+                            .multilineTextAlignment(.trailing)
+                            .contextMenu {
+                                Button {
+                                    UIPasteboard.general.string = address
+                                } label: {
+                                    Label("Copy Address", systemImage: "doc.on.doc")
+                                }
+                            }
+                    } else {
+                        Text("—")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
         }
         .padding()
         .background(Color(.systemBackground))
         .cornerRadius(10)
         .shadow(radius: 2)
+        .onChange(of: manager.location) { _, newLocation in
+            reverseGeocodeIfNeeded(newLocation)
+        }
+        .onAppear {
+            reverseGeocodeIfNeeded(manager.location)
+        }
+    }
+
+    private func reverseGeocodeIfNeeded(_ location: CLLocation?) {
+        guard let location else { return }
+        let threshold: CLLocationDistance = 50
+        if let last = lastGeocodedLocation, location.distance(from: last) < threshold { return }
+        lastGeocodedLocation = location
+        isGeocodingAddress = true
+        CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
+            DispatchQueue.main.async {
+                isGeocodingAddress = false
+                if let p = placemarks?.first {
+                    var parts: [String] = []
+                    if let number = p.subThoroughfare { parts.append(number) }
+                    if let street = p.thoroughfare {
+                        parts.append(street)
+                    } else if let subLocality = p.subLocality {
+                        parts.append(subLocality)
+                    } else if let area = p.administrativeArea {
+                        parts.append(area)
+                    }
+                    if let city = p.locality { parts.append(city) }
+                    currentAddress = parts.isEmpty ? p.country : parts.joined(separator: ", ")
+                }
+            }
+        }
     }
 }
 
@@ -602,6 +787,7 @@ struct MinMaxValuesSectionView: View {
 // MARK: - Recording Controls View
 struct RecordingControlsView: View {
     @ObservedObject var manager: LocationManager
+    @Binding var showTripHistory: Bool
     
     var body: some View {
         VStack(spacing: 10) {
@@ -630,6 +816,13 @@ struct RecordingControlsView: View {
                         .foregroundColor(.secondary)
                 }
             }
+            
+            Button(action: { showTripHistory = true }) {
+                Label("Trip History", systemImage: "clock.arrow.circlepath")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.bordered)
         }
         .padding()
     }
@@ -849,33 +1042,177 @@ private func authorizationStatusColor(_ status: CLAuthorizationStatus) -> Color 
     }
 }
 
+// MARK: - Map Coordinate Decimation
+
+/// Reduces a dense array of location records to a visually representative set of
+/// coordinates by skipping any point closer than `minDistance` metres to the last
+/// kept point. Processes records in chronological order (oldest-first).
+/// This collapses stationary clusters (e.g. parked overnight) to a single point
+/// while preserving the shape of the travelled path.
+private func decimateCoordinates(_ records: [LocationRecord], minDistance: CLLocationDistance) -> [CLLocationCoordinate2D] {
+    guard records.count > 1 else {
+        return records.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+    }
+    // Records are newest-first; reverse to process in travel order
+    let ordered = records.reversed()
+    var result: [CLLocationCoordinate2D] = []
+    var lastKept: CLLocation?
+    for record in ordered {
+        let loc = CLLocation(latitude: record.latitude, longitude: record.longitude)
+        if let last = lastKept, loc.distance(from: last) < minDistance { continue }
+        result.append(CLLocationCoordinate2D(latitude: record.latitude, longitude: record.longitude))
+        lastKept = loc
+    }
+    // Always include the very last (newest) point
+    if let newest = records.first {
+        let newestCoord = CLLocationCoordinate2D(latitude: newest.latitude, longitude: newest.longitude)
+        if result.last.map({ $0.latitude != newestCoord.latitude || $0.longitude != newestCoord.longitude }) ?? true {
+            result.append(newestCoord)
+        }
+    }
+    return result
+}
+
 // MARK: - Location Map View
 enum TimeRange: String, CaseIterable {
-    case recent400 = "Recent 400"
+    case lastMonth = "Last Month"
     case last24Hours = "Last 24 Hours"
     case lastWeek = "Last Week"
     
     var description: String {
         switch self {
-        case .recent400: return "Most recent 400 records"
+        case .lastMonth: return "All records from last 30 days"
         case .last24Hours: return "All records from last 24 hours"
         case .lastWeek: return "All records from last 7 days"
         }
     }
 }
 
+// MARK: - Trip Analysis Data Types
+
+struct TripStats {
+    let totalDistanceMeters: Double
+    let elevationGainMeters: Double
+    let elevationLossMeters: Double
+    let durationSeconds: TimeInterval
+    let averageSpeedMps: Double
+    let pointCount: Int
+    
+    static let empty = TripStats(
+        totalDistanceMeters: 0,
+        elevationGainMeters: 0,
+        elevationLossMeters: 0,
+        durationSeconds: 0,
+        averageSpeedMps: 0,
+        pointCount: 0
+    )
+}
+
+struct ElevationPoint: Identifiable {
+    let id = UUID()
+    let cumulativeDistanceKm: Double
+    let altitudeMeters: Double
+}
+
+struct SpeedPoint: Identifiable {
+    let id = UUID()
+    let cumulativeDistanceKm: Double
+    let speedKph: Double
+}
+
+private func computeTripStats(from records: [LocationRecord]) -> TripStats {
+    guard records.count >= 2 else {
+        return TripStats(
+            totalDistanceMeters: 0,
+            elevationGainMeters: 0,
+            elevationLossMeters: 0,
+            durationSeconds: 0,
+            averageSpeedMps: 0,
+            pointCount: records.count
+        )
+    }
+    
+    let sorted = records.sorted { $0.timestamp < $1.timestamp }
+    var totalDistance: Double = 0
+    var elevationGain: Double = 0
+    var elevationLoss: Double = 0
+    
+    for i in 1..<sorted.count {
+        let prev = sorted[i - 1]
+        let curr = sorted[i]
+        let prevLocation = CLLocation(latitude: prev.latitude, longitude: prev.longitude)
+        let currLocation = CLLocation(latitude: curr.latitude, longitude: curr.longitude)
+        totalDistance += currLocation.distance(from: prevLocation)
+        
+        let altDelta = curr.altitude - prev.altitude
+        if altDelta > 0 {
+            elevationGain += altDelta
+        } else {
+            elevationLoss += -altDelta
+        }
+    }
+    
+    let duration = sorted.last!.timestamp.timeIntervalSince(sorted.first!.timestamp)
+    let avgSpeed = duration > 0 ? totalDistance / duration : 0
+    
+    return TripStats(
+        totalDistanceMeters: totalDistance,
+        elevationGainMeters: elevationGain,
+        elevationLossMeters: elevationLoss,
+        durationSeconds: duration,
+        averageSpeedMps: avgSpeed,
+        pointCount: sorted.count
+    )
+}
+
+private func buildChartData(from records: [LocationRecord]) -> ([ElevationPoint], [SpeedPoint]) {
+    guard records.count >= 2 else { return ([], []) }
+    
+    let sorted = records.sorted { $0.timestamp < $1.timestamp }
+    var elevationPoints: [ElevationPoint] = []
+    var speedPoints: [SpeedPoint] = []
+    var cumulativeDistanceKm: Double = 0
+    
+    elevationPoints.append(ElevationPoint(cumulativeDistanceKm: 0, altitudeMeters: sorted[0].altitude))
+    speedPoints.append(SpeedPoint(cumulativeDistanceKm: 0, speedKph: 0))
+    
+    for i in 1..<sorted.count {
+        let prev = sorted[i - 1]
+        let curr = sorted[i]
+        let prevLocation = CLLocation(latitude: prev.latitude, longitude: prev.longitude)
+        let currLocation = CLLocation(latitude: curr.latitude, longitude: curr.longitude)
+        let distance = currLocation.distance(from: prevLocation)
+        cumulativeDistanceKm += distance / 1000.0
+        
+        elevationPoints.append(ElevationPoint(cumulativeDistanceKm: cumulativeDistanceKm, altitudeMeters: curr.altitude))
+        
+        let timeDelta = curr.timestamp.timeIntervalSince(prev.timestamp)
+        let speedMps = timeDelta > 0 ? distance / timeDelta : 0
+        let speedKph = min(speedMps * 3.6, 250.0)
+        speedPoints.append(SpeedPoint(cumulativeDistanceKm: cumulativeDistanceKm, speedKph: speedKph))
+    }
+    
+    return (elevationPoints, speedPoints)
+}
+
 struct LocationMapView: View {
     @ObservedObject var locationManager: LocationManager
+    @Binding var selectedTimeRange: TimeRange
+    var showHeatmap: Bool = false
+    var heatmapCells: [HeatmapCell] = []
+    var onRecordsLoaded: (([LocationRecord]) -> Void)? = nil
+    @Binding var showHeatmapToggle: Bool
     @State private var locationRecords: [LocationRecord] = []
+    @State private var displayCoordinates: [CLLocationCoordinate2D] = []
     @State private var mapCameraPosition: MapCameraPosition = .region(
         MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to San Francisco
+            center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         )
     )
     @State private var isLoading = true
     @State private var errorMessage: String?
-    @State private var selectedTimeRange: TimeRange = .recent400
+    @State private var showFullscreenMap = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -892,6 +1229,10 @@ struct LocationMapView: View {
                             .foregroundColor(.red)
                     }
                     Spacer()
+                    Button(action: { showHeatmapToggle.toggle() }) {
+                        Image(systemName: "flame.fill")
+                            .foregroundColor(showHeatmap ? .orange : .secondary)
+                    }
                     if isLoading {
                         ProgressView()
                             .scaleEffect(0.8)
@@ -922,7 +1263,7 @@ struct LocationMapView: View {
                     }
                 }
                 
-                if selectedTimeRange != .recent400 {
+                if selectedTimeRange != .lastMonth {
                     Text(selectedTimeRange.description)
                         .font(.caption2)
                         .foregroundColor(.secondary)
@@ -963,17 +1304,54 @@ struct LocationMapView: View {
                 .cornerRadius(10)
             } else {
                 Map(position: $mapCameraPosition) {
-                    ForEach(locationRecords) { record in
-                        Annotation(timeAgo(from: record.timestamp), coordinate: CLLocationCoordinate2D(latitude: record.latitude, longitude: record.longitude)) {
-                            Image(systemName: "mappin.circle.fill")
-                                .foregroundColor(.red)
+                    if displayCoordinates.count > 1 {
+                        MapPolyline(coordinates: displayCoordinates)
+                            .stroke(.blue, lineWidth: 2)
+                    }
+                    if let oldest = locationRecords.last {
+                        Annotation("Start", coordinate: CLLocationCoordinate2D(latitude: oldest.latitude, longitude: oldest.longitude)) {
+                            Image(systemName: "flag.circle.fill")
+                                .foregroundColor(.green)
                                 .background(Color.white)
                                 .clipShape(Circle())
+                        }
+                    }
+                    if let newest = locationRecords.first {
+                        Annotation("Latest", coordinate: CLLocationCoordinate2D(latitude: newest.latitude, longitude: newest.longitude)) {
+                            Image(systemName: "location.circle.fill")
+                                .foregroundColor(.blue)
+                                .background(Color.white)
+                                .clipShape(Circle())
+                        }
+                    }
+                    if showHeatmap {
+                        ForEach(heatmapCells) { cell in
+                            MapCircle(center: cell.coordinate, radius: 80)
+                                .foregroundStyle(
+                                    HeatmapManager.color(for: cell.normalizedIntensity)
+                                        .opacity(0.3 + 0.4 * cell.normalizedIntensity)
+                                )
                         }
                     }
                 }
                 .frame(height: 250)
                 .cornerRadius(10)
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.caption)
+                        .padding(6)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .padding(8)
+                }
+                .onTapGesture { showFullscreenMap = true }
+                .fullScreenCover(isPresented: $showFullscreenMap) {
+                    FullscreenLocationMapView(
+                        locationRecords: locationRecords,
+                        showHeatmap: showHeatmap,
+                        heatmapCells: heatmapCells
+                    )
+                }
             }
             
             HStack {
@@ -1020,18 +1398,20 @@ struct LocationMapView: View {
             
             do {
                 let records: [LocationRecord]
+                let fetchStart = Date()
                 
                 switch selectedTimeRange {
-                case .recent400:
-                    records = try await locationManager.cloudKitManager.fetchLocationRecords()
+                case .lastMonth:
+                    records = try await locationManager.dataManager.fetchLocationRecords(since: Calendar.current.date(byAdding: .day, value: -30, to: Date())!)
                 case .last24Hours:
-                    records = try await locationManager.cloudKitManager.fetchLocationRecordsLast24Hours()
+                    records = try await locationManager.dataManager.fetchLocationRecordsLast24Hours()
                 case .lastWeek:
-                    records = try await locationManager.cloudKitManager.fetchLocationRecordsLastWeek()
+                    records = try await locationManager.dataManager.fetchLocationRecordsLastWeek()
                 }
                 
                 await MainActor.run {
                     self.locationRecords = records
+                    self.displayCoordinates = decimateCoordinates(records, minDistance: 50)
                     self.isLoading = false
                     self.errorMessage = nil
                     
@@ -1040,7 +1420,9 @@ struct LocationMapView: View {
                         self.mapCameraPosition = .region(self.calculateMapRegion(for: records))
                     }
                     
-                    LogManager.info("Loaded \(records.count) records for \(selectedTimeRange.rawValue)", category: "Map")
+                    self.onRecordsLoaded?(records)
+                    let elapsed = Date().timeIntervalSince(fetchStart)
+                    LogManager.info("Loaded \(records.count) records for \(selectedTimeRange.rawValue) in \(String(format: "%.2f", elapsed))s", category: "Map")
                 }
             } catch {
                 await MainActor.run {
@@ -1132,12 +1514,15 @@ struct LocationMapView: View {
 // MARK: - Current Location Map View
 struct CurrentLocationMapView: View {
     @ObservedObject var locationManager: LocationManager
+    var parkingLocation: CLLocation? = nil
     @State private var mapCameraPosition: MapCameraPosition = .region(
         MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to San Francisco
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         )
     )
+    @State private var isHeadingMode: Bool = false
+    @State private var showFullscreenMap = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1152,6 +1537,27 @@ struct CurrentLocationMapView: View {
                     Text("Live")
                         .font(.caption)
                         .foregroundColor(.blue)
+                }
+                Button(action: {
+                    isHeadingMode.toggle()
+                    if isHeadingMode {
+                        locationManager.startUpdatingHeading()
+                    } else {
+                        locationManager.stopUpdatingHeading()
+                        // Snap back to north-up
+                        if let location = locationManager.location {
+                            let region = MKCoordinateRegion(
+                                center: location.coordinate,
+                                span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
+                            )
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                mapCameraPosition = .region(region)
+                            }
+                        }
+                    }
+                }) {
+                    Image(systemName: isHeadingMode ? "location.north.fill" : "location.north.line.fill")
+                        .foregroundColor(isHeadingMode ? .blue : .secondary)
                 }
             }
             
@@ -1168,9 +1574,33 @@ struct CurrentLocationMapView: View {
                         }
                         .shadow(radius: 3)
                     }
+                    if let parking = parkingLocation {
+                        Annotation("Parking", coordinate: parking.coordinate) {
+                            Image(systemName: "car.fill")
+                                .foregroundColor(.blue)
+                                .padding(6)
+                                .background(Circle().fill(.white))
+                                .shadow(radius: 2)
+                        }
+                    }
                 }
                 .frame(height: 200)
                 .cornerRadius(10)
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.caption)
+                        .padding(6)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .padding(8)
+                }
+                .onTapGesture { showFullscreenMap = true }
+                .fullScreenCover(isPresented: $showFullscreenMap) {
+                    FullscreenCurrentLocationMapView(
+                        locationManager: locationManager,
+                        parkingLocation: parkingLocation
+                    )
+                }
                 .onAppear {
                     updateMapPosition(for: location)
                 }
@@ -1178,6 +1608,19 @@ struct CurrentLocationMapView: View {
                     if let newLocation = newLocation {
                         updateMapPosition(for: newLocation)
                     }
+                }
+                .onChange(of: locationManager.heading) { _, newHeading in
+                    if isHeadingMode, let location = locationManager.location {
+                        updateCameraForHeading(location: location, heading: newHeading)
+                    }
+                }
+                .onDisappear {
+                    locationManager.stopUpdatingHeading()
+                    isHeadingMode = false
+                }
+                
+                if isHeadingMode {
+                    CompassRoseView(heading: locationManager.heading)
                 }
                 
                 // Coordinates display
@@ -1226,14 +1669,958 @@ struct CurrentLocationMapView: View {
     }
     
     private func updateMapPosition(for location: CLLocation) {
-        let newRegion = MKCoordinateRegion(
-            center: location.coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
-        )
-        
-        withAnimation(.easeInOut(duration: 0.5)) {
-            mapCameraPosition = .region(newRegion)
+        if isHeadingMode {
+            updateCameraForHeading(location: location, heading: locationManager.heading)
+        } else {
+            let newRegion = MKCoordinateRegion(
+                center: location.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
+            )
+            withAnimation(.easeInOut(duration: 0.5)) {
+                mapCameraPosition = .region(newRegion)
+            }
         }
+    }
+    
+    private func updateCameraForHeading(location: CLLocation, heading: CLLocationDirection) {
+        let camera = MapCamera(
+            centerCoordinate: location.coordinate,
+            distance: 600,
+            heading: heading,
+            pitch: 0
+        )
+        withAnimation(.easeInOut(duration: 0.3)) {
+            mapCameraPosition = .camera(camera)
+        }
+    }
+}
+
+// MARK: - Trip Analysis Section View
+struct TripAnalysisSectionView: View {
+    @ObservedObject var locationManager: LocationManager
+    @Binding var selectedTimeRange: TimeRange
+    @State private var tripStats: TripStats = .empty
+    @State private var elevationPoints: [ElevationPoint] = []
+    @State private var speedPoints: [SpeedPoint] = []
+    @State private var isLoading = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Trip Analysis")
+                .font(.headline)
+            
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 50)
+            } else if tripStats.pointCount == 0 {
+                Text("No data for selected range")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+            } else {
+                TripStatsSummaryView(stats: tripStats)
+                
+                if elevationPoints.count >= 2 {
+                    TripElevationChartView(points: elevationPoints)
+                }
+                
+                if speedPoints.count >= 2 {
+                    TripSpeedChartView(points: speedPoints)
+                }
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 2)
+        .onAppear {
+            loadAndAnalyze()
+        }
+        .onChange(of: selectedTimeRange) { _, _ in
+            loadAndAnalyze()
+        }
+        .onChange(of: locationManager.lastLocationSaved) { _, _ in
+            if locationManager.isRecording {
+                loadAndAnalyze()
+            }
+        }
+    }
+    
+    private func loadAndAnalyze() {
+        Task {
+            await MainActor.run { isLoading = true }
+            do {
+                let records: [LocationRecord]
+                switch selectedTimeRange {
+                case .lastMonth:
+                    records = try await locationManager.dataManager.fetchLocationRecords(since: Calendar.current.date(byAdding: .day, value: -30, to: Date())!)
+                case .last24Hours:
+                    records = try await locationManager.dataManager.fetchLocationRecordsLast24Hours()
+                case .lastWeek:
+                    records = try await locationManager.dataManager.fetchLocationRecordsLastWeek()
+                }
+                let stats = computeTripStats(from: records)
+                let (elevPts, spdPts) = buildChartData(from: records)
+                await MainActor.run {
+                    self.tripStats = stats
+                    self.elevationPoints = elevPts
+                    self.speedPoints = spdPts
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run { isLoading = false }
+            }
+        }
+    }
+}
+
+// MARK: - Trip Stats Summary View
+struct TripStatsSummaryView: View {
+    let stats: TripStats
+    
+    private let columns = [
+        GridItem(.flexible()),
+        GridItem(.flexible()),
+        GridItem(.flexible())
+    ]
+    
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            TripStatCell(title: "Distance", value: formatDistance(stats.totalDistanceMeters), icon: "arrow.triangle.swap")
+            TripStatCell(title: "Duration", value: formatDuration(stats.durationSeconds), icon: "clock")
+            TripStatCell(title: "Avg Speed", value: formatSpeed(stats.averageSpeedMps), icon: "speedometer")
+            TripStatCell(title: "Elev Gain", value: String(format: "+%.0f m", stats.elevationGainMeters), icon: "arrow.up.right")
+            TripStatCell(title: "Elev Loss", value: String(format: "-%.0f m", stats.elevationLossMeters), icon: "arrow.down.right")
+            TripStatCell(title: "Points", value: "\(stats.pointCount)", icon: "mappin.circle")
+        }
+    }
+    
+    private func formatDistance(_ meters: Double) -> String {
+        if meters >= 1000 {
+            return String(format: "%.2f km", meters / 1000)
+        } else {
+            return String(format: "%.0f m", meters)
+        }
+    }
+    
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let h = Int(seconds) / 3600
+        let m = (Int(seconds) % 3600) / 60
+        let s = Int(seconds) % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        } else {
+            return String(format: "%02d:%02d", m, s)
+        }
+    }
+    
+    private func formatSpeed(_ mps: Double) -> String {
+        let kph = mps * 3.6
+        return String(format: "%.1f km/h", kph)
+    }
+}
+
+struct TripStatCell: View {
+    let title: String
+    let value: String
+    let icon: String
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundColor(.blue)
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .fontWeight(.semibold)
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(8)
+        .background(Color(.systemGray6))
+        .cornerRadius(8)
+    }
+}
+
+// MARK: - Trip Elevation Chart View
+struct TripElevationChartView: View {
+    let points: [ElevationPoint]
+    
+    private var altitudeRange: ClosedRange<Double> {
+        let altitudes = points.map { $0.altitudeMeters }
+        let minAlt = (altitudes.min() ?? 0) - 10
+        let maxAlt = (altitudes.max() ?? 100) + 10
+        return minAlt...maxAlt
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Elevation Profile")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Chart(points) { point in
+                AreaMark(
+                    x: .value("Distance (km)", point.cumulativeDistanceKm),
+                    y: .value("Altitude (m)", point.altitudeMeters)
+                )
+                .foregroundStyle(
+                    LinearGradient(
+                        gradient: Gradient(colors: [.blue.opacity(0.4), .blue.opacity(0.1)]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                
+                LineMark(
+                    x: .value("Distance (km)", point.cumulativeDistanceKm),
+                    y: .value("Altitude (m)", point.altitudeMeters)
+                )
+                .foregroundStyle(Color.blue)
+                .lineStyle(StrokeStyle(lineWidth: 2))
+            }
+            .chartYScale(domain: altitudeRange)
+            .chartXAxisLabel("Distance (km)")
+            .chartYAxisLabel("Altitude (m)")
+            .frame(height: 120)
+        }
+    }
+}
+
+// MARK: - Trip Speed Chart View
+struct TripSpeedChartView: View {
+    let points: [SpeedPoint]
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Speed Profile")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Chart(points) { point in
+                BarMark(
+                    x: .value("Distance (km)", point.cumulativeDistanceKm),
+                    y: .value("Speed (km/h)", point.speedKph)
+                )
+                .foregroundStyle(Color.green.gradient)
+            }
+            .chartXAxisLabel("Distance (km)")
+            .chartYAxisLabel("Speed (km/h)")
+            .frame(height: 100)
+        }
+    }
+}
+
+// MARK: - Compass Rose View
+struct CompassRoseView: View {
+    let heading: CLLocationDirection
+    
+    private var cardinal: String {
+        switch heading {
+        case 337.5...360, 0..<22.5: return "N"
+        case 22.5..<67.5: return "NE"
+        case 67.5..<112.5: return "E"
+        case 112.5..<157.5: return "SE"
+        case 157.5..<202.5: return "S"
+        case 202.5..<247.5: return "SW"
+        case 247.5..<292.5: return "W"
+        case 292.5..<337.5: return "NW"
+        default: return "N"
+        }
+    }
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    .frame(width: 44, height: 44)
+                
+                Text("N")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.red)
+                    .rotationEffect(.degrees(-heading))
+            }
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(String(format: "%.0f°", heading))
+                    .font(.system(.caption, design: .monospaced))
+                Text(cardinal)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+    }
+}
+
+// MARK: - Parking Section View
+
+struct ParkingSectionView: View {
+    @ObservedObject var parkingManager: ParkingManager
+    @ObservedObject var locationManager: LocationManager
+    @State private var parkingAddress: String?
+    @State private var isGeocodingParking = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "car.fill")
+                    .foregroundColor(.blue)
+                Text("Parking")
+                    .font(.headline)
+                Spacer()
+            }
+
+            if parkingManager.parkingLocation != nil {
+                if let current = locationManager.location,
+                   let (distance, bearing) = parkingManager.distanceAndBearing(from: current) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Distance")
+                                .font(.caption).foregroundColor(.secondary)
+                            Text(distance < 1000
+                                 ? String(format: "%.0f m", distance)
+                                 : String(format: "%.2f km", distance / 1000))
+                                .font(.title2).bold()
+                        }
+                        Spacer()
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Direction")
+                                .font(.caption).foregroundColor(.secondary)
+                            Text(parkingManager.cardinalDirection(from: bearing))
+                                .font(.title2).bold()
+                        }
+                        Spacer()
+                        if let date = parkingManager.parkingDate {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Parked")
+                                    .font(.caption).foregroundColor(.secondary)
+                                Text(date, style: .relative)
+                                    .font(.callout)
+                            }
+                        }
+                    }
+                }
+
+                HStack {
+                    Text("Parked at")
+                        .font(.caption).foregroundColor(.secondary)
+                    Spacer()
+                    if isGeocodingParking {
+                        ProgressView().scaleEffect(0.7)
+                    } else if let address = parkingAddress {
+                        Text(address)
+                            .font(.caption)
+                            .multilineTextAlignment(.trailing)
+                            .contextMenu {
+                                Button {
+                                    UIPasteboard.general.string = address
+                                } label: {
+                                    Label("Copy Address", systemImage: "doc.on.doc")
+                                }
+                            }
+                    } else {
+                        Text("—")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Button(role: .destructive) {
+                    parkingManager.clearParking()
+                } label: {
+                    Label("Clear Parking", systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button {
+                    if let loc = locationManager.location {
+                        parkingManager.saveParking(location: loc)
+                    }
+                } label: {
+                    Label("Save Parking", systemImage: "pin.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(locationManager.location == nil)
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 2)
+        .onChange(of: parkingManager.parkingLocation) { _, newParking in
+            geocodeParkingLocation(newParking)
+        }
+        .onAppear {
+            geocodeParkingLocation(parkingManager.parkingLocation)
+        }
+    }
+
+    private func geocodeParkingLocation(_ location: CLLocation?) {
+        guard let location else {
+            parkingAddress = nil
+            return
+        }
+        isGeocodingParking = true
+        CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
+            DispatchQueue.main.async {
+                isGeocodingParking = false
+                if let p = placemarks?.first {
+                    var parts: [String] = []
+                    if let number = p.subThoroughfare { parts.append(number) }
+                    if let street = p.thoroughfare {
+                        parts.append(street)
+                    } else if let subLocality = p.subLocality {
+                        parts.append(subLocality)
+                    } else if let area = p.administrativeArea {
+                        parts.append(area)
+                    }
+                    if let city = p.locality { parts.append(city) }
+                    parkingAddress = parts.isEmpty ? p.country : parts.joined(separator: ", ")
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Weather Section View
+
+struct WeatherSectionView: View {
+    @ObservedObject var weatherManager: WeatherManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "cloud.sun.fill")
+                    .symbolRenderingMode(.hierarchical)
+                Text("Weather")
+                    .font(.headline)
+                Spacer()
+                if weatherManager.isLoading {
+                    ProgressView().scaleEffect(0.8)
+                }
+            }
+
+            if let error = weatherManager.errorMessage {
+                Text(error).font(.caption).foregroundColor(.red)
+            }
+
+            if let current = weatherManager.current {
+                HStack(spacing: 16) {
+                    VStack(spacing: 4) {
+                        Image(systemName: WeatherManager.sfSymbol(for: current.weatherCode))
+                            .font(.system(size: 32))
+                            .symbolRenderingMode(.hierarchical)
+                        Text(WeatherManager.description(for: current.weatherCode))
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(width: 80)
+
+                    Text(String(format: "%.1f°C", current.temperature))
+                        .font(.title).bold()
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Label(String(format: "%.0f km/h", current.windSpeed),
+                              systemImage: "wind")
+                            .font(.caption)
+                        Label("\(current.humidity)%", systemImage: "humidity.fill")
+                            .font(.caption)
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                }
+
+                if !weatherManager.hourlyForecast.isEmpty {
+                    Divider()
+                    Text("Next 24 Hours")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(weatherManager.hourlyForecast) { hour in
+                                VStack(spacing: 4) {
+                                    Text(hour.time, format: .dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    Image(systemName: WeatherManager.sfSymbol(for: hour.weatherCode))
+                                        .symbolRenderingMode(.hierarchical)
+                                        .font(.body)
+                                    Text(String(format: "%.0f°", hour.temperature))
+                                        .font(.caption).bold()
+                                }
+                                .frame(width: 44)
+                            }
+                        }
+                    }
+                }
+            } else if !weatherManager.isLoading {
+                Text("Weather data unavailable")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .shadow(radius: 2)
+    }
+}
+
+// MARK: - Trip Save Sheet
+
+struct TripSaveSheet: View {
+    @ObservedObject var locationManager: LocationManager
+    @Binding var tripName: String
+    let selectedTimeRange: TimeRange
+    @Environment(\.dismiss) private var dismiss
+    @State private var isSaving = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Trip Name") {
+                    TextField("e.g. Morning Run", text: $tripName)
+                }
+                Section {
+                    Text("Recording started: \(locationManager.recordingStartDate.map { $0.formatted(.dateTime.month().day().hour().minute()) } ?? "Unknown")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("Save Trip")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Discard") {
+                        locationManager.clearRecordingState()
+                        tripName = ""
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Save") {
+                            saveTrip()
+                        }
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func saveTrip() {
+        isSaving = true
+        let startDate = locationManager.recordingStartDate ?? Date().addingTimeInterval(-60)
+        let endDate = Date()
+        let name = tripName.trimmingCharacters(in: .whitespaces).isEmpty
+            ? "Trip \(endDate.formatted(.dateTime.month().day().hour().minute()))"
+            : tripName
+
+        Task {
+            do {
+                let records = try await locationManager.dataManager.fetchLocationRecords(
+                    from: startDate, to: endDate)
+                let stats = computeTripStats(from: records)
+                let trip = TripRecord(
+                    name: name,
+                    startDate: startDate,
+                    endDate: endDate,
+                    totalDistance: stats.totalDistanceMeters,
+                    elevationGain: stats.elevationGainMeters,
+                    elevationLoss: stats.elevationLossMeters,
+                    duration: stats.durationSeconds,
+                    avgSpeed: stats.averageSpeedMps,
+                    pointCount: stats.pointCount
+                )
+                try await locationManager.dataManager.saveTripRecord(trip)
+            } catch {
+                LogManager.warning("Error saving trip: \(error.localizedDescription)", category: "Trip")
+            }
+            await MainActor.run {
+                locationManager.clearRecordingState()
+                tripName = ""
+                isSaving = false
+                dismiss()
+            }
+        }
+    }
+}
+
+// MARK: - Trip History View
+
+struct TripHistoryView: View {
+    let dataManager: CacheAwareDataManager
+    @State private var trips: [TripRecord] = []
+    @State private var isLoading = true
+    @State private var selectedTrip: TripRecord?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Loading trips...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if trips.isEmpty {
+                    ContentUnavailableView(
+                        "No Trips",
+                        systemImage: "map",
+                        description: Text("Stop a recording session to save a trip")
+                    )
+                } else {
+                    List(trips) { trip in
+                        Button {
+                            selectedTrip = trip
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(trip.name)
+                                    .font(.headline)
+                                    .foregroundColor(.primary)
+                                HStack {
+                                    Text(trip.startDate, style: .date)
+                                    Spacer()
+                                    Text(trip.totalDistance >= 1000
+                                         ? String(format: "%.1f km", trip.totalDistance / 1000)
+                                         : String(format: "%.0f m", trip.totalDistance))
+                                    Text("·")
+                                    Text(formatDurationShort(trip.duration))
+                                }
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Trip History")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .sheet(item: $selectedTrip) { trip in
+                TripDetailView(trip: trip, dataManager: dataManager)
+            }
+            .task {
+                do {
+                    trips = try await dataManager.fetchTripRecords()
+                } catch {
+                    LogManager.warning("Error fetching trips: \(error.localizedDescription)", category: "Trip")
+                }
+                isLoading = false
+            }
+        }
+    }
+
+    private func formatDurationShort(_ seconds: TimeInterval) -> String {
+        let h = Int(seconds) / 3600
+        let m = (Int(seconds) % 3600) / 60
+        if h > 0 { return "\(h)h \(m)m" }
+        return "\(m)m"
+    }
+}
+
+// MARK: - Trip Detail View
+
+struct TripDetailView: View {
+    let trip: TripRecord
+    let dataManager: CacheAwareDataManager
+    @State private var records: [LocationRecord] = []
+    @State private var isLoading = true
+    @State private var elevationPoints: [ElevationPoint] = []
+    @State private var speedPoints: [SpeedPoint] = []
+    @State private var showFullscreenMap = false
+    @Environment(\.dismiss) private var dismiss
+
+    private var stats: TripStats {
+        TripStats(
+            totalDistanceMeters: trip.totalDistance,
+            elevationGainMeters: trip.elevationGain,
+            elevationLossMeters: trip.elevationLoss,
+            durationSeconds: trip.duration,
+            averageSpeedMps: trip.avgSpeed,
+            pointCount: trip.pointCount
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    TripStatsSummaryView(stats: stats)
+                        .padding(.horizontal)
+
+                    if isLoading {
+                        ProgressView("Loading route...")
+                            .frame(height: 200)
+                    } else if !records.isEmpty {
+                        Map {
+                            MapPolyline(coordinates: records.map {
+                                CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                            })
+                            .stroke(.blue, lineWidth: 3)
+
+                            if let first = records.first {
+                                Annotation("Start", coordinate: CLLocationCoordinate2D(
+                                    latitude: first.latitude, longitude: first.longitude)) {
+                                    Image(systemName: "flag.fill").foregroundColor(.green)
+                                }
+                            }
+                            if let last = records.last {
+                                Annotation("End", coordinate: CLLocationCoordinate2D(
+                                    latitude: last.latitude, longitude: last.longitude)) {
+                                    Image(systemName: "flag.checkered").foregroundColor(.red)
+                                }
+                            }
+                        }
+                        .frame(height: 250)
+                        .cornerRadius(10)
+                        .overlay(alignment: .topTrailing) {
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.caption)
+                                .padding(6)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                .padding(8)
+                        }
+                        .onTapGesture { showFullscreenMap = true }
+                        .fullScreenCover(isPresented: $showFullscreenMap) {
+                            FullscreenTripMapView(records: records)
+                        }
+                        .padding(.horizontal)
+
+                        if elevationPoints.count >= 2 {
+                            TripElevationChartView(points: elevationPoints)
+                                .padding(.horizontal)
+                        }
+                        if speedPoints.count >= 2 {
+                            TripSpeedChartView(points: speedPoints)
+                                .padding(.horizontal)
+                        }
+                    }
+                }
+                .padding(.vertical)
+            }
+            .navigationTitle(trip.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task {
+                do {
+                    let fetched = try await dataManager.fetchLocationRecords(
+                        from: trip.startDate, to: trip.endDate)
+                    let (elev, spd) = buildChartData(from: fetched)
+                    await MainActor.run {
+                        records = fetched
+                        elevationPoints = elev
+                        speedPoints = spd
+                    }
+                } catch {
+                    LogManager.warning("Error loading trip route: \(error.localizedDescription)", category: "Trip")
+                }
+                isLoading = false
+            }
+        }
+    }
+}
+
+
+// MARK: - Fullscreen Map Views
+
+struct FullscreenCurrentLocationMapView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var locationManager: LocationManager
+    var parkingLocation: CLLocation?
+    @State private var mapCameraPosition: MapCameraPosition = .automatic
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Map(position: $mapCameraPosition) {
+                if let location = locationManager.location {
+                    Annotation("Current Location", coordinate: location.coordinate) {
+                        ZStack {
+                            Circle()
+                                .fill(.blue)
+                                .frame(width: 24, height: 24)
+                            Circle()
+                                .stroke(.white, lineWidth: 3)
+                                .frame(width: 24, height: 24)
+                        }
+                        .shadow(radius: 3)
+                    }
+                }
+                if let parking = parkingLocation {
+                    Annotation("Parking", coordinate: parking.coordinate) {
+                        Image(systemName: "car.fill")
+                            .foregroundColor(.blue)
+                            .padding(6)
+                            .background(Circle().fill(.white))
+                            .shadow(radius: 2)
+                    }
+                }
+            }
+            .ignoresSafeArea()
+            .onAppear {
+                if let loc = locationManager.location {
+                    mapCameraPosition = .region(MKCoordinateRegion(
+                        center: loc.coordinate,
+                        span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
+                    ))
+                }
+            }
+            .onChange(of: locationManager.location) { _, newLocation in
+                if let newLocation = newLocation {
+                    withAnimation {
+                        mapCameraPosition = .region(MKCoordinateRegion(
+                            center: newLocation.coordinate,
+                            span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
+                        ))
+                    }
+                }
+            }
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title)
+                    .foregroundStyle(.white, .black.opacity(0.6))
+            }
+            .padding(.top, 60)
+            .padding(.trailing, 16)
+        }
+        .gesture(DragGesture().onEnded { value in
+            if value.translation.height > 80 { dismiss() }
+        })
+    }
+}
+
+struct FullscreenLocationMapView: View {
+    @Environment(\.dismiss) private var dismiss
+    let locationRecords: [LocationRecord]
+    let showHeatmap: Bool
+    let heatmapCells: [HeatmapCell]
+    @State private var mapCameraPosition: MapCameraPosition = .automatic
+    @State private var displayCoordinates: [CLLocationCoordinate2D] = []
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Map(position: $mapCameraPosition) {
+                if displayCoordinates.count > 1 {
+                    MapPolyline(coordinates: displayCoordinates)
+                        .stroke(.blue, lineWidth: 2)
+                }
+                if let oldest = locationRecords.last {
+                    Annotation("Start", coordinate: CLLocationCoordinate2D(latitude: oldest.latitude, longitude: oldest.longitude)) {
+                        Image(systemName: "flag.circle.fill")
+                            .foregroundColor(.green)
+                            .background(Color.white)
+                            .clipShape(Circle())
+                    }
+                }
+                if let newest = locationRecords.first {
+                    Annotation("Latest", coordinate: CLLocationCoordinate2D(latitude: newest.latitude, longitude: newest.longitude)) {
+                        Image(systemName: "location.circle.fill")
+                            .foregroundColor(.blue)
+                            .background(Color.white)
+                            .clipShape(Circle())
+                    }
+                }
+                if showHeatmap {
+                    ForEach(heatmapCells) { cell in
+                        MapCircle(center: cell.coordinate, radius: 80)
+                            .foregroundStyle(
+                                HeatmapManager.color(for: cell.normalizedIntensity)
+                                    .opacity(0.3 + 0.4 * cell.normalizedIntensity)
+                            )
+                    }
+                }
+            }
+            .ignoresSafeArea()
+            .onAppear {
+                displayCoordinates = decimateCoordinates(locationRecords, minDistance: 15)
+                if !locationRecords.isEmpty {
+                    let lats = locationRecords.map { $0.latitude }
+                    let lons = locationRecords.map { $0.longitude }
+                    let minLat = lats.min()!, maxLat = lats.max()!
+                    let minLon = lons.min()!, maxLon = lons.max()!
+                    mapCameraPosition = .region(MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2),
+                        span: MKCoordinateSpan(
+                            latitudeDelta: max((maxLat - minLat) * 1.4, 0.005),
+                            longitudeDelta: max((maxLon - minLon) * 1.4, 0.005)
+                        )
+                    ))
+                }
+            }
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title)
+                    .foregroundStyle(.white, .black.opacity(0.6))
+            }
+            .padding(.top, 60)
+            .padding(.trailing, 16)
+        }
+        .gesture(DragGesture().onEnded { value in
+            if value.translation.height > 80 { dismiss() }
+        })
+    }
+}
+
+struct FullscreenTripMapView: View {
+    @Environment(\.dismiss) private var dismiss
+    let records: [LocationRecord]
+    @State private var mapCameraPosition: MapCameraPosition = .automatic
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Map(position: $mapCameraPosition) {
+                MapPolyline(coordinates: records.map {
+                    CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                })
+                .stroke(.blue, lineWidth: 3)
+
+                if let first = records.first {
+                    Annotation("Start", coordinate: CLLocationCoordinate2D(
+                        latitude: first.latitude, longitude: first.longitude)) {
+                        Image(systemName: "flag.fill").foregroundColor(.green)
+                    }
+                }
+                if let last = records.last {
+                    Annotation("End", coordinate: CLLocationCoordinate2D(
+                        latitude: last.latitude, longitude: last.longitude)) {
+                        Image(systemName: "flag.checkered").foregroundColor(.red)
+                    }
+                }
+            }
+            .ignoresSafeArea()
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title)
+                    .foregroundStyle(.white, .black.opacity(0.6))
+            }
+            .padding(.top, 60)
+            .padding(.trailing, 16)
+        }
+        .gesture(DragGesture().onEnded { value in
+            if value.translation.height > 80 { dismiss() }
+        })
     }
 }
 

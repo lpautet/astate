@@ -2,10 +2,12 @@ import Foundation
 import CoreLocation
 import SwiftUI
 import UserNotifications
+import WidgetKit
+import Combine
 
 class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let locationManager = CLLocationManager()
-    let cloudKitManager = CloudKitManager()
+    let dataManager = CacheAwareDataManager()
     private var recordingTimer: Timer?
     private var lastRecordingTime: Date?
     private var lastRecordedLocation: CLLocation?
@@ -13,6 +15,12 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastNotificationTime: Date?
     private var pendingExtremes: [String] = []
     private var hasLoadedMinMaxValues = false
+    private var altitudePointsBuffer: [AltitudeDataPoint] = []
+    private var todayElevationGainBuffer: Double = 0
+    private var lastAltitudeForGain: Double?
+    private var lastGainResetDate: Date?
+    private var lastWidgetReload: Date?
+    private var networkCancellable: AnyCancellable?
     
     @Published var location: CLLocation?
     @Published var speed: Double = 0.0
@@ -25,18 +33,44 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var maxLongitude: Double = -Double.infinity
     @Published var minSpeed: Double = Double.infinity
     @Published var maxSpeed: Double = -Double.infinity
-    @Published var isRecording = false
+    @Published var isRecording = false {
+        didSet { UserDefaults.standard.set(isRecording, forKey: "isRecording") }
+    }
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published var lastLocationSaved = Date() // Trigger for map updates
+    @Published var heading: CLLocationDirection = 0
+    @Published var headingAccuracy: CLLocationDirection = -1
+    @Published var recordingStartDate: Date? {
+        didSet {
+            if let date = recordingStartDate {
+                UserDefaults.standard.set(date, forKey: "recordingStartDate")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "recordingStartDate")
+            }
+        }
+    }
+    @Published var showTripSavePrompt = false
     
     override init() {
         super.init()
         locationManager.delegate = self
+        isRecording = UserDefaults.standard.bool(forKey: "isRecording")
+        recordingStartDate = UserDefaults.standard.object(forKey: "recordingStartDate") as? Date
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = 10.0  // Default: 10 meters - better for battery while still responsive
         
         // Request notification permission (this is safe during init)
         requestNotificationPermission()
+
+        // Drain offline queue when network is restored
+        networkCancellable = NetworkMonitor.shared.$isConnected
+            .filter { $0 }
+            .sink { [weak self] _ in
+                self?.drainQueue()
+                Task { [weak self] in
+                    await self?.dataManager.performDeltaSync()
+                }
+            }
     }
     
     private func requestNotificationPermission() {
@@ -74,7 +108,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         Task { @MainActor [weak self] in
             do {
                 guard let self = self else { return }
-                if let minMaxRecord = try await self.cloudKitManager.fetchMinMaxRecord() {
+                if let minMaxRecord = try await self.dataManager.fetchMinMaxRecord() {
                     self.minAltitude = minMaxRecord.minAltitude
                     self.maxAltitude = minMaxRecord.maxAltitude
                     self.minLatitude = minMaxRecord.minLatitude
@@ -105,7 +139,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         
         Task {
             do {
-                try await cloudKitManager.saveMinMaxRecord(minMaxRecord)
+                try await dataManager.saveMinMaxRecord(minMaxRecord)
             } catch {
                 LogManager.warning("Error saving min/max values: \(error.localizedDescription)", category: "Location")
             }
@@ -121,6 +155,11 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         // Load min/max values when we first start location updates
         loadMinMaxValuesIfNeeded()
         
+        // Sync CoreData cache with CloudKit in background
+        Task {
+            await dataManager.performDeltaSync()
+        }
+        
         guard locationManager.authorizationStatus == .authorizedWhenInUse || 
               locationManager.authorizationStatus == .authorizedAlways else {
             requestLocationPermission()
@@ -135,10 +174,27 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         
         locationManager.startUpdatingLocation()
+
+        // Resume recording timer if it was active before restart
+        if isRecording && recordingTimer == nil {
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+                self?.recordCurrentLocation()
+            }
+        }
     }
     
     func stopUpdatingLocation() {
         locationManager.stopUpdatingLocation()
+    }
+    
+    func startUpdatingHeading() {
+        guard CLLocationManager.headingAvailable() else { return }
+        locationManager.headingFilter = 5.0
+        locationManager.startUpdatingHeading()
+    }
+    
+    func stopUpdatingHeading() {
+        locationManager.stopUpdatingHeading()
     }
     
     func setHighPrecisionMode(_ enabled: Bool) {
@@ -151,6 +207,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     
     func startRecording() {
         isRecording = true
+        recordingStartDate = Date()
         LogManager.info("Started location recording", category: "Location")
         // Record immediately when starting
         recordCurrentLocation()
@@ -169,6 +226,14 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         recordingTimer = nil
         lastRecordingTime = nil
         lastRecordedLocation = nil
+        if recordingStartDate != nil {
+            showTripSavePrompt = true
+        }
+    }
+
+    func clearRecordingState() {
+        recordingStartDate = nil
+        showTripSavePrompt = false
     }
     
     deinit {
@@ -210,7 +275,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             Task { [weak self] in
                 do {
                     guard let self = self else { return }
-                    try await self.cloudKitManager.saveLocationRecord(record)
+                    try await self.dataManager.saveLocationRecord(record)
                     self.updateMinMaxValues(with: location)
                     
                     // Notify that new location data was saved
@@ -219,7 +284,8 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
                     }
                     LogManager.info("Location recorded: moved \(String(format: "%.1f", distanceMoved))m", category: "Location")
                 } catch {
-                    LogManager.critical("Error saving location record: \(error.localizedDescription)", category: "Location")
+                    OfflineLocationQueue.shared.enqueue(record)
+                    LogManager.warning("Location save failed, queued for retry (\(OfflineLocationQueue.shared.pendingCount) pending): \(error.localizedDescription)", category: "Location")
                 }
             }
         } else {
@@ -346,7 +412,71 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         notificationTimer = nil
     }
     
+    private func drainQueue() {
+        let pending = OfflineLocationQueue.shared.dequeueAll()
+        guard !pending.isEmpty else { return }
+        LogManager.info("Network restored, uploading \(pending.count) queued location records", category: "Location")
+        Task { [weak self] in
+            guard let self = self else { return }
+            var uploadedIds: Set<String> = []
+            for record in pending {
+                do {
+                    try await self.dataManager.saveLocationRecord(record)
+                    uploadedIds.insert(record.id)
+                } catch {
+                    LogManager.warning("Queued record upload failed: \(error.localizedDescription)", category: "Location")
+                }
+            }
+            if !uploadedIds.isEmpty {
+                OfflineLocationQueue.shared.remove(ids: uploadedIds)
+                LogManager.info("Uploaded \(uploadedIds.count)/\(pending.count) queued records", category: "Location")
+            }
+        }
+    }
+
+        // MARK: - Shared Widget Data
+
+    private func updateSharedAltitudeData(altitude: Double) {
+        let calendar = Calendar.current
+        if let lastReset = lastGainResetDate, !calendar.isDateInToday(lastReset) {
+            todayElevationGainBuffer = 0
+        }
+        if lastGainResetDate == nil { lastGainResetDate = Date() }
+
+        if let lastAlt = lastAltitudeForGain {
+            let diff = altitude - lastAlt
+            if diff > 0 { todayElevationGainBuffer += diff }
+        }
+        lastAltitudeForGain = altitude
+
+        altitudePointsBuffer.append(AltitudeDataPoint(timestamp: Date(), altitude: altitude))
+        if altitudePointsBuffer.count > 50 {
+            altitudePointsBuffer = Array(altitudePointsBuffer.suffix(50))
+        }
+
+        let shared = SharedAltitudeData(
+            currentAltitude: altitude,
+            todayElevationGain: todayElevationGainBuffer,
+            recentPoints: altitudePointsBuffer,
+            lastUpdated: Date()
+        )
+        shared.save()
+
+        if lastWidgetReload == nil || Date().timeIntervalSince(lastWidgetReload!) > 300 {
+            WidgetCenter.shared.reloadTimelines(ofKind: "AstateAltitudeWidget")
+            lastWidgetReload = Date()
+        }
+    }
+
     // MARK: - CLLocationManagerDelegate
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        guard newHeading.headingAccuracy >= 0 else { return }
+        DispatchQueue.main.async {
+            self.heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+            self.headingAccuracy = newHeading.headingAccuracy
+        }
+    }
     
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         DispatchQueue.main.async {
@@ -361,6 +491,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.location = location
             self.speed = location.speed >= 0 ? location.speed : 0
             self.speedAccuracy = location.speedAccuracy >= 0 ? location.speedAccuracy : 0
+            self.updateSharedAltitudeData(altitude: location.altitude)
             
             if self.isRecording {
                 self.updateMinMaxValues(with: location)

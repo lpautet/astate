@@ -1,7 +1,7 @@
 import Foundation
 import CloudKit
 
-struct LocationRecord: Identifiable {
+struct LocationRecord: Identifiable, Codable {
     let id: String
     let timestamp: Date
     let latitude: Double

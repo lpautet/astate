@@ -6,7 +6,20 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		1D37B2592F47611C00FD280F /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D37B2582F47611C00FD280F /* WidgetKit.framework */; };
+		1D37B25B2F47611C00FD280F /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D37B25A2F47611C00FD280F /* SwiftUI.framework */; };
+		1D37B26C2F47611D00FD280F /* AstateWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1D37B2562F47611C00FD280F /* AstateWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
+		1D37B26A2F47611D00FD280F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1DF578FD2DD00A2F000D3213 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1D37B2552F47611C00FD280F;
+			remoteInfo = AstateWidgetExtension;
+		};
 		1DF579172DD00A32000D3213 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 1DF578FD2DD00A2F000D3213 /* Project object */;
@@ -23,13 +36,45 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		1D37B2712F47611D00FD280F /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				1D37B26C2F47611D00FD280F /* AstateWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		1D37B2562F47611C00FD280F /* AstateWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AstateWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		1D37B2582F47611C00FD280F /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		1D37B25A2F47611C00FD280F /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		1D37B2722F47617600FD280F /* AstateWidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AstateWidgetExtension.entitlements; sourceTree = "<group>"; };
 		1DF579052DD00A2F000D3213 /* Astate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Astate.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1DF579162DD00A32000D3213 /* AstateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AstateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1DF579202DD00A32000D3213 /* AstateUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AstateUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		1D37B2702F47611D00FD280F /* Exceptions for "AstateWidget" folder in "AstateWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 1D37B2552F47611C00FD280F /* AstateWidgetExtension */;
+		};
+		1D37B2742F4763AC00FD280F /* Exceptions for "Astate" folder in "AstateWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Managers/SharedAltitudeData.swift,
+			);
+			target = 1D37B2552F47611C00FD280F /* AstateWidgetExtension */;
+		};
 		1DF579282DD00A32000D3213 /* Exceptions for "Astate" folder in "Astate" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -40,10 +85,19 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		1D37B25C2F47611C00FD280F /* AstateWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1D37B2702F47611D00FD280F /* Exceptions for "AstateWidget" folder in "AstateWidgetExtension" target */,
+			);
+			path = AstateWidget;
+			sourceTree = "<group>";
+		};
 		1DF579072DD00A2F000D3213 /* Astate */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				1DF579282DD00A32000D3213 /* Exceptions for "Astate" folder in "Astate" target */,
+				1D37B2742F4763AC00FD280F /* Exceptions for "Astate" folder in "AstateWidgetExtension" target */,
 			);
 			path = Astate;
 			sourceTree = "<group>";
@@ -61,6 +115,15 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		1D37B2532F47611C00FD280F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1D37B25B2F47611C00FD280F /* SwiftUI.framework in Frameworks */,
+				1D37B2592F47611C00FD280F /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		1DF579022DD00A2F000D3213 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -85,12 +148,24 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		1D37B2572F47611C00FD280F /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				1D37B2582F47611C00FD280F /* WidgetKit.framework */,
+				1D37B25A2F47611C00FD280F /* SwiftUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		1DF578FC2DD00A2F000D3213 = {
 			isa = PBXGroup;
 			children = (
+				1D37B2722F47617600FD280F /* AstateWidgetExtension.entitlements */,
 				1DF579072DD00A2F000D3213 /* Astate */,
 				1DF579192DD00A32000D3213 /* AstateTests */,
 				1DF579232DD00A32000D3213 /* AstateUITests */,
+				1D37B25C2F47611C00FD280F /* AstateWidget */,
+				1D37B2572F47611C00FD280F /* Frameworks */,
 				1DF579062DD00A2F000D3213 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -101,6 +176,7 @@
 				1DF579052DD00A2F000D3213 /* Astate.app */,
 				1DF579162DD00A32000D3213 /* AstateTests.xctest */,
 				1DF579202DD00A32000D3213 /* AstateUITests.xctest */,
+				1D37B2562F47611C00FD280F /* AstateWidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,6 +184,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1D37B2552F47611C00FD280F /* AstateWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1D37B26D2F47611D00FD280F /* Build configuration list for PBXNativeTarget "AstateWidgetExtension" */;
+			buildPhases = (
+				1D37B2522F47611C00FD280F /* Sources */,
+				1D37B2532F47611C00FD280F /* Frameworks */,
+				1D37B2542F47611C00FD280F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1D37B25C2F47611C00FD280F /* AstateWidget */,
+			);
+			name = AstateWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = AstateWidgetExtension;
+			productReference = 1D37B2562F47611C00FD280F /* AstateWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		1DF579042DD00A2F000D3213 /* Astate */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 1DF579292DD00A32000D3213 /* Build configuration list for PBXNativeTarget "Astate" */;
@@ -115,10 +213,12 @@
 				1DF579012DD00A2F000D3213 /* Sources */,
 				1DF579022DD00A2F000D3213 /* Frameworks */,
 				1DF579032DD00A2F000D3213 /* Resources */,
+				1D37B2712F47611D00FD280F /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				1D37B26B2F47611D00FD280F /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				1DF579072DD00A2F000D3213 /* Astate */,
@@ -183,9 +283,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1630;
+				LastSwiftUpdateCheck = 2620;
 				LastUpgradeCheck = 1630;
 				TargetAttributes = {
+					1D37B2552F47611C00FD280F = {
+						CreatedOnToolsVersion = 26.2;
+					};
 					1DF579042DD00A2F000D3213 = {
 						CreatedOnToolsVersion = 16.3;
 					};
@@ -216,11 +319,19 @@
 				1DF579042DD00A2F000D3213 /* Astate */,
 				1DF579152DD00A32000D3213 /* AstateTests */,
 				1DF5791F2DD00A32000D3213 /* AstateUITests */,
+				1D37B2552F47611C00FD280F /* AstateWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		1D37B2542F47611C00FD280F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		1DF579032DD00A2F000D3213 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -245,6 +356,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		1D37B2522F47611C00FD280F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		1DF579012DD00A2F000D3213 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -269,6 +387,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		1D37B26B2F47611D00FD280F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1D37B2552F47611C00FD280F /* AstateWidgetExtension */;
+			targetProxy = 1D37B26A2F47611D00FD280F /* PBXContainerItemProxy */;
+		};
 		1DF579182DD00A32000D3213 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 1DF579042DD00A2F000D3213 /* Astate */;
@@ -282,6 +405,70 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		1D37B26E2F47611D00FD280F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = AstateWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = R3TJ23PHL6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AstateWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AstateWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pautet.app.Astate.AstateWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		1D37B26F2F47611D00FD280F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = AstateWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = R3TJ23PHL6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AstateWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AstateWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pautet.app.Astate.AstateWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		1DF5792A2DD00A32000D3213 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -540,6 +727,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1D37B26D2F47611D00FD280F /* Build configuration list for PBXNativeTarget "AstateWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1D37B26E2F47611D00FD280F /* Debug */,
+				1D37B26F2F47611D00FD280F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		1DF579002DD00A2F000D3213 /* Build configuration list for PBXProject "Astate" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

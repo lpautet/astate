@@ -46,6 +46,7 @@ class CloudKitManager: ObservableObject {
             do {
                 try await createLocationRecordSchema()
                 try await createMinMaxRecordSchema()
+                try await createTripRecordSchema()
                 print("CloudKit schema setup completed")
             } catch {
                 print("CloudKit schema setup failed: \(error.localizedDescription)")
@@ -111,6 +112,29 @@ class CloudKitManager: ObservableObject {
         }
     }
     
+
+    private func createTripRecordSchema() async throws {
+        let recordType = "TripRecord"
+        let sampleRecord = CKRecord(recordType: recordType)
+        sampleRecord["name"] = "schema-init"
+        sampleRecord["startDate"] = Date()
+        sampleRecord["endDate"] = Date()
+        sampleRecord["totalDistance"] = 0.0
+        sampleRecord["elevationGain"] = 0.0
+        sampleRecord["elevationLoss"] = 0.0
+        sampleRecord["duration"] = 0.0
+        sampleRecord["avgSpeed"] = 0.0
+        sampleRecord["pointCount"] = 0
+
+        do {
+            let _ = try await database.save(sampleRecord)
+            try await database.deleteRecord(withID: sampleRecord.recordID)
+            print("TripRecord schema created successfully")
+        } catch {
+            print("TripRecord schema creation failed: \(error.localizedDescription)")
+        }
+    }
+
     func saveLocationRecord(_ record: LocationRecord) async throws {
         ensureInitialized()
         let ckRecord = record.toCKRecord()
@@ -304,6 +328,71 @@ class CloudKitManager: ObservableObject {
         }
     }
     
+    // MARK: - Trip Record Methods
+
+    func saveTripRecord(_ trip: TripRecord) async throws {
+        ensureInitialized()
+        let record = trip.toCKRecord()
+        _ = try await database.save(record)
+    }
+
+    func fetchTripRecords() async throws -> [TripRecord] {
+        ensureInitialized()
+        do {
+            return try await withCheckedThrowingContinuation { continuation in
+                let query = CKQuery(recordType: "TripRecord", predicate: NSPredicate(value: true))
+                query.sortDescriptors = [NSSortDescriptor(key: "startDate", ascending: false)]
+                let operation = CKQueryOperation(query: query)
+                operation.resultsLimit = 100
+                var results: [TripRecord] = []
+
+                operation.recordMatchedBlock = { _, result in
+                    if case .success(let record) = result,
+                       let trip = TripRecord.fromCKRecord(record) {
+                        results.append(trip)
+                    }
+                }
+                operation.queryResultBlock = { result in
+                    switch result {
+                    case .success: continuation.resume(returning: results)
+                    case .failure(let error): continuation.resume(throwing: error)
+                    }
+                }
+                self.database.add(operation)
+            }
+        } catch {
+            print("CloudKit trip query failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    func fetchLocationRecords(from startDate: Date, to endDate: Date) async throws -> [LocationRecord] {
+        ensureInitialized()
+        let predicate = NSPredicate(format: "timestamp >= %@ AND timestamp <= %@",
+                                     startDate as NSDate, endDate as NSDate)
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = CKQuery(recordType: "LocationRecord", predicate: predicate)
+            query.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
+            let operation = CKQueryOperation(query: query)
+            operation.resultsLimit = 400
+            var results: [LocationRecord] = []
+
+            operation.recordMatchedBlock = { _, result in
+                if case .success(let record) = result,
+                   let loc = LocationRecord.fromCKRecord(record) {
+                    results.append(loc)
+                }
+            }
+            operation.queryResultBlock = { result in
+                switch result {
+                case .success: continuation.resume(returning: results)
+                case .failure(let error): continuation.resume(throwing: error)
+                }
+            }
+            self.database.add(operation)
+        }
+    }
+
     // Alternative approach: Track record IDs locally and fetch directly
     private func fetchRecordsById(_ recordIDs: [CKRecord.ID]) async throws -> [LocationRecord] {
         return try await withCheckedThrowingContinuation { continuation in
